@@ -15,7 +15,15 @@ const fmt = (s: number) =>
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  // { urls: 'turn:YOUR_TURN_HOST', username: 'YOUR_USER', credential: 'YOUR_PASS' },
+  {
+    urls: [
+      'turn:global.relay.metered.ca:80',
+      'turn:global.relay.metered.ca:443',
+      'turns:global.relay.metered.ca:443',
+    ],
+    username: '33c573ac1dd5ec4a29556327',
+    credential: 'UuRkAsEjWoPrAG8Y',
+  },
 ];
 
 export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext }: Props) {
@@ -32,17 +40,17 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
   const offerSent         = useRef(false);
   const isOfferer         = useRef(false);
 
-  const [muted,     setMuted]     = useState(false);
-  const [camOff,    setCamOff]    = useState(false);
-  const [mirrored,  setMirrored]  = useState(true);
-  const [duration,  setDuration]  = useState(0);
-  const [messages,  setMessages]  = useState<{ id: string; sender_id: string; message: string }[]>([]);
-  const [input,     setInput]     = useState('');
-  const [showChat,  setShowChat]  = useState(false);
-  const [connected, setConnected] = useState(false);
+  const [muted,        setMuted]        = useState(false);
+  const [camOff,       setCamOff]       = useState(false);
+  const [mirrored,     setMirrored]     = useState(true);
+  const [duration,     setDuration]     = useState(0);
+  const [messages,     setMessages]     = useState<{ id: string; sender_id: string; message: string }[]>([]);
+  const [input,        setInput]        = useState('');
+  const [showChat,     setShowChat]     = useState(false);
+  const [connected,    setConnected]    = useState(false);
   const [showControls, setShowControls] = useState(true);
-  const [newMsg,    setNewMsg]    = useState(false);
-  const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [newMsg,       setNewMsg]       = useState(false);
+  const controlsTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -80,7 +88,6 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
     [flushIceCandidates],
   );
 
-  // Auto-hide controls
   const resetControlsTimer = useCallback(() => {
     setShowControls(true);
     if (controlsTimer.current) clearTimeout(controlsTimer.current);
@@ -185,7 +192,6 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
                   return;
                 }
                 if (msg.type === 'end') {
-                  // Remote peer ended the call — go back to matching
                   if (isMounted.current) onEnd();
                   return;
                 }
@@ -277,7 +283,6 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
   };
 
   const handleEnd = useCallback(() => {
-    // Notify remote peer before closing
     supabase.from('signals').insert({
       match_id: matchId, type: 'end', data: {}, sender: userId,
     }).then(() => {
@@ -453,7 +458,6 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
 const STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
 
-  /* ── Gradients ── */
   .vc-grad-top {
     position: absolute; top: 0; left: 0; right: 0; height: 120px;
     background: linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, transparent 100%);
@@ -465,7 +469,6 @@ const STYLES = `
     pointer-events: none; z-index: 2;
   }
 
-  /* ── Connecting ── */
   .vc-connecting {
     position: absolute; inset: 0; z-index: 5;
     display: flex; flex-direction: column;
@@ -488,7 +491,6 @@ const STYLES = `
     letter-spacing: 0.05em; z-index: 1; margin-top: 60px;
   }
 
-  /* ── PiP ── */
   .vc-pip-wrap {
     position: absolute; bottom: 100px; right: 16px;
     width: 100px; aspect-ratio: 3/4;
@@ -507,7 +509,6 @@ const STYLES = `
     background: #1a1a2e;
   }
 
-  /* ── Top bar ── */
   .vc-topbar {
     position: absolute; top: 0; left: 0; right: 0; z-index: 10;
     padding: 16px 20px;
@@ -516,12 +517,9 @@ const STYLES = `
   }
   .vc-topbar--visible { opacity: 1; }
   .vc-status { display: flex; align-items: center; gap: 8px; }
-  .vc-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-  }
+  .vc-dot { width: 8px; height: 8px; border-radius: 50%; }
   .vc-dot--on {
-    background: #4ade80;
-    box-shadow: 0 0 8px #4ade80;
+    background: #4ade80; box-shadow: 0 0 8px #4ade80;
     animation: vc-blink 2s ease-in-out infinite;
   }
   .vc-dot--wait {
@@ -535,7 +533,6 @@ const STYLES = `
     color: #fff; letter-spacing: 0.08em;
   }
 
-  /* ── Controls ── */
   .vc-controls {
     position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
     padding: 16px 20px 32px;
@@ -555,33 +552,26 @@ const STYLES = `
     font-family: 'Cairo', sans-serif;
   }
   .vc-btn:active { transform: scale(0.93); }
-  .vc-btn--off {
-    background: rgba(255,255,255,0.05);
-    opacity: 0.5;
-  }
+  .vc-btn--off { background: rgba(255,255,255,0.05); opacity: 0.5; }
   .vc-btn--active {
     background: rgba(124,106,255,0.35);
     border-color: rgba(124,106,255,0.6);
   }
   .vc-btn--end {
-    background: rgba(220,38,38,0.85);
-    border-color: #dc2626;
+    background: rgba(220,38,38,0.85); border-color: #dc2626;
     box-shadow: 0 4px 20px rgba(220,38,38,0.4);
   }
   .vc-btn--end:hover { background: rgba(220,38,38,1); }
   .vc-btn-icon { font-size: 1.35rem; line-height: 1; }
   .vc-btn-label { font-size: 0.62rem; font-weight: 600; opacity: 0.85; white-space: nowrap; }
 
-  /* ── Badge ── */
   .vc-badge {
     position: absolute; top: 6px; right: 10px;
     width: 8px; height: 8px; border-radius: 50%;
-    background: #f43f5e;
-    box-shadow: 0 0 6px #f43f5e;
+    background: #f43f5e; box-shadow: 0 0 6px #f43f5e;
     animation: vc-blink 1s infinite;
   }
 
-  /* ── Chat ── */
   .vc-chat {
     position: absolute; bottom: 100px; left: 12px; right: 130px;
     z-index: 15; border-radius: 20px;
@@ -611,8 +601,8 @@ const STYLES = `
     cursor: pointer; font-size: 0.8rem; padding: 0; line-height: 1;
   }
   .vc-chat-messages {
-    flex: 1; overflow-y: auto; padding: 8px 12px; display: flex;
-    flex-direction: column; gap: 6px;
+    flex: 1; overflow-y: auto; padding: 8px 12px;
+    display: flex; flex-direction: column; gap: 6px;
     scrollbar-width: none;
   }
   .vc-chat-messages::-webkit-scrollbar { display: none; }
@@ -626,14 +616,12 @@ const STYLES = `
     line-height: 1.4; word-break: break-word;
   }
   .vc-msg--me {
-    background: rgba(124,106,255,0.75);
-    color: #fff; align-self: flex-end;
-    border-bottom-right-radius: 4px;
+    background: rgba(124,106,255,0.75); color: #fff;
+    align-self: flex-end; border-bottom-right-radius: 4px;
   }
   .vc-msg--them {
-    background: rgba(255,255,255,0.12);
-    color: rgba(255,255,255,0.9); align-self: flex-start;
-    border-bottom-left-radius: 4px;
+    background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.9);
+    align-self: flex-start; border-bottom-left-radius: 4px;
   }
   .vc-chat-input-row {
     display: flex; gap: 6px; padding: 8px 10px;
@@ -644,8 +632,7 @@ const STYLES = `
     border: 1px solid rgba(255,255,255,0.1);
     border-radius: 10px; padding: 7px 12px;
     color: #fff; font-size: 0.8rem;
-    font-family: 'Cairo', sans-serif; outline: none;
-    direction: rtl;
+    font-family: 'Cairo', sans-serif; outline: none; direction: rtl;
   }
   .vc-chat-input::placeholder { color: rgba(255,255,255,0.3); }
   .vc-chat-send {
