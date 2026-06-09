@@ -94,14 +94,7 @@ const timeAgo = (iso: string): string => {
 const initials = (p?: Profile | null): string =>
   (p?.full_name || p?.username || '?')[0].toUpperCase();
 
-const realUsers: DemoUser[] = [
-  { id: 'd1', name: 'لينا',  age: 23, flag: '🇪🇬', color: '#c084fc', match: 92 },
-  { id: 'd2', name: 'كريم', age: 26, flag: '🇸🇦', color: '#38bdf8', match: 87 },
-  { id: 'd3', name: 'نور',  age: 21, flag: '🇲🇦', color: '#f472b6', match: 95 },
-  { id: 'd4', name: 'علي',  age: 29, flag: '🇦🇪', color: '#34d399', match: 78 },
-  { id: 'd5', name: 'ريم',  age: 24, flag: '🇯🇴', color: '#fb923c', match: 84 },
-  { id: 'd6', name: 'أحمد', age: 27, flag: '🇱🇧', color: '#60a5fa', match: 91 },
-];
+
 
 // ── Snor Live Logo ───────────────────────────────────────────────
 const SnorLiveLogo = ({ size = 26 }: { size?: number }) => (
