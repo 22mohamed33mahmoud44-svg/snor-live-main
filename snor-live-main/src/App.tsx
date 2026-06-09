@@ -1,16 +1,23 @@
-import { useState, useEffect } from 'react';
-import Splash          from './Splash';
-import Onboarding      from './Onboarding';
-import Auth            from './Auth';
-import CompleteProfile from './CompleteProfile';
-import Profile         from './Profile';
-import RandomMatch     from './RandomMatch';
-import VideoCall       from './VideoCall';
-import Dashboard       from './Dashboard';
-import Navbar          from './components/Navbar';
-import Home            from './pages/Home';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useAuth, OnboardingData } from './hooks/useAuth';
 import { translations } from './translations';
+
+const Splash          = lazy(() => import('./Splash'));
+const Onboarding      = lazy(() => import('./Onboarding'));
+const Auth            = lazy(() => import('./Auth'));
+const CompleteProfile = lazy(() => import('./CompleteProfile'));
+const Profile         = lazy(() => import('./Profile'));
+const RandomMatch     = lazy(() => import('./RandomMatch'));
+const VideoCall       = lazy(() => import('./VideoCall'));
+const Dashboard       = lazy(() => import('./Dashboard'));
+const Navbar          = lazy(() => import('./components/Navbar'));
+const Home            = lazy(() => import('./pages/Home'));
+
+const Loading = () => (
+  <div style={{ position:'fixed', inset:0, background:'#000', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 }}>
+    <div style={{ fontSize:'3rem' }}>💎</div>
+  </div>
+);
 
 function App() {
   const [lang,            setLang]            = useState<'ar' | 'en'>('ar');
@@ -44,87 +51,95 @@ function App() {
     match.user1 === myId ? match.user2 : match.user1;
 
   // ── 1) Splash ──
-  if (showSplash) return <Splash onDone={() => setShowSplash(false)} />;
+  if (showSplash) return (
+    <Suspense fallback={<Loading />}>
+      <Splash onDone={() => setShowSplash(false)} />
+    </Suspense>
+  );
 
   // ── 2) Loading ──
-  if (user && !profileChecked) {
-    return (
-      <div style={{ position:'fixed', inset:0, background:'#000', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 }}>
-        <div style={{ fontSize:'3rem' }}>💎</div>
-      </div>
-    );
-  }
+  if (user && !profileChecked) return <Loading />;
 
   // ── 3) Onboarding ──
-  if (user && profileChecked && showOnboarding) {
-    return <Onboarding onComplete={(data: OnboardingData) => handleOnboardingComplete(data, user.id)} />;
-  }
+  if (user && profileChecked && showOnboarding) return (
+    <Suspense fallback={<Loading />}>
+      <Onboarding onComplete={(data: OnboardingData) => handleOnboardingComplete(data, user.id)} />
+    </Suspense>
+  );
 
   // ── 4) Logged-in screens ──
   if (user && profileChecked && !showOnboarding) {
     if (currentMatch) return (
-      <VideoCall
-        userId={user.id}
-        matchId={currentMatch.id}
-        remoteUserId={getRemoteUserId(currentMatch, user.id)}
-        onEnd={() => setCurrentMatch(null)}
-        onNext={() => { setCurrentMatch(null); setShowRandomMatch(true); }}
-      />
+      <Suspense fallback={<Loading />}>
+        <VideoCall
+          userId={user.id}
+          matchId={currentMatch.id}
+          remoteUserId={getRemoteUserId(currentMatch, user.id)}
+          onEnd={() => setCurrentMatch(null)}
+          onNext={() => { setCurrentMatch(null); setShowRandomMatch(true); }}
+        />
+      </Suspense>
     );
 
     if (showRandomMatch) return (
-      <RandomMatch
-        userId={user.id}
-        onClose={() => setShowRandomMatch(false)}
-        onMatch={(match: any) => { setCurrentMatch(match); setShowRandomMatch(false); }}
-      />
+      <Suspense fallback={<Loading />}>
+        <RandomMatch
+          userId={user.id}
+          onClose={() => setShowRandomMatch(false)}
+          onMatch={(match: any) => { setCurrentMatch(match); setShowRandomMatch(false); }}
+        />
+      </Suspense>
     );
 
     return (
-      <Dashboard
-        userId={user.id}
-        onStartRandomMatch={() => setShowRandomMatch(true)}
-        onLogout={logout}
-      />
+      <Suspense fallback={<Loading />}>
+        <Dashboard
+          userId={user.id}
+          onStartRandomMatch={() => setShowRandomMatch(true)}
+          onLogout={logout}
+        />
+      </Suspense>
     );
   }
 
   // ── 5) Landing page (guest) ──
   return (
-    <div className="min-h-screen bg-primary relative" dir={dir}>
+    <Suspense fallback={<Loading />}>
+      <div className="min-h-screen bg-primary relative" dir={dir}>
 
-      {!user && <Auth isOpen={showAuth} onClose={() => setShowAuth(false)} />}
+        {!user && <Auth isOpen={showAuth} onClose={() => setShowAuth(false)} />}
 
-      {user && showCompleteProfile && (
-        <CompleteProfile userId={user.id} onComplete={() => setShowCompleteProfile(false)} />
-      )}
+        {user && showCompleteProfile && (
+          <CompleteProfile userId={user.id} onComplete={() => setShowCompleteProfile(false)} />
+        )}
 
-      {user && showProfile && (
-        <Profile
-          userId={user.id}
-          onLogout={() => { logout(); setShowProfile(false); }}
-          onClose={() => setShowProfile(false)}
-          onStartRandomMatch={() => { setShowProfile(false); setShowRandomMatch(true); }}
+        {user && showProfile && (
+          <Profile
+            userId={user.id}
+            onLogout={() => { logout(); setShowProfile(false); }}
+            onClose={() => setShowProfile(false)}
+            onStartRandomMatch={() => { setShowProfile(false); setShowRandomMatch(true); }}
+          />
+        )}
+
+        <Navbar
+          user={user}
+          t={t}
+          toggleLanguage={toggleLanguage}
+          onShowAuth={() => setShowAuth(true)}
+          onShowProfile={() => setShowProfile(true)}
         />
-      )}
 
-      <Navbar
-        user={user}
-        t={t}
-        toggleLanguage={toggleLanguage}
-        onShowAuth={() => setShowAuth(true)}
-        onShowProfile={() => setShowProfile(true)}
-      />
+        <Home
+          lang={lang}
+          t={t}
+          user={user}
+          onShowAuth={() => setShowAuth(true)}
+          onStartRandomMatch={() => setShowRandomMatch(true)}
+        />
 
-      <Home
-        lang={lang}
-        t={t}
-        user={user}
-        onShowAuth={() => setShowAuth(true)}
-        onStartRandomMatch={() => setShowRandomMatch(true)}
-      />
-
-    </div>
+      </div>
+    </Suspense>
   );
 }
 
