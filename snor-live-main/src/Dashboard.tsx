@@ -1,4 +1,5 @@
-import { useState, useRef, ReactNode } from 'react';
+import { useState, useRef, ReactNode, useEffect } from 'react';
+import { supabase } from './supabase';
 import { CoinsBalance } from "./components/CoinsBalance";
 import BuyCoins from './BuyCoins';
 // ── Types ────────────────────────────────────────────────────────
@@ -93,7 +94,7 @@ const timeAgo = (iso: string): string => {
 const initials = (p?: Profile | null): string =>
   (p?.full_name || p?.username || '?')[0].toUpperCase();
 
-const DEMO_USERS: DemoUser[] = [
+const realUsers: DemoUser[] = [
   { id: 'd1', name: 'لينا',  age: 23, flag: '🇪🇬', color: '#c084fc', match: 92 },
   { id: 'd2', name: 'كريم', age: 26, flag: '🇸🇦', color: '#38bdf8', match: 87 },
   { id: 'd3', name: 'نور',  age: 21, flag: '🇲🇦', color: '#f472b6', match: 95 },
@@ -314,7 +315,28 @@ export default function Dashboard({
   const [openChat, setOpenChat] = useState<ChatOther | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [searchQuery, setSearchQuery]   = useState('');
-  const [onlineCount]           = useState(Math.floor(Math.random() * 300) + 180);
+  const [realUsers, setRealUsers] = useState<DemoUser[]>([]);
+
+useEffect(() => {
+  supabase
+    .from('profiles')
+    .select('id, username, gender, avatar_url')
+    .neq('id', userId)
+    .limit(6)
+    .then(({ data }) => {
+      if (!data) return;
+      const colors = ['#c084fc','#38bdf8','#f472b6','#34d399','#fb923c','#60a5fa'];
+      setRealUsers(data.map((p, i) => ({
+        id: p.id,
+        name: p.username || 'مستخدم',
+        age: 20,
+        flag: p.gender === 'أنثى' ? '👩' : '👨',
+        color: colors[i % colors.length],
+        match: Math.floor(Math.random() * 20) + 80,
+      })));
+    });
+}, [userId]);
+  const [onlineCount]                   = useState(Math.floor(Math.random() * 300) + 180);
   const [activeCard, setActiveCard]     = useState<string | null>(null);
   const [showBuyCoins, setShowBuyCoins] = useState(false);
   const totalUnread = conversations.reduce((s, c) => s + c.unread, 0);
@@ -466,7 +488,7 @@ export default function Dashboard({
               <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,.3)', cursor: 'pointer' }} onClick={() => setTab('match')}>عرض الكل</div>
             </div>
             <div style={{ display: 'flex', gap: 12, padding: '6px 16px 20px', overflowX: 'auto' }}>
-              {DEMO_USERS.map(u => (
+              {realUsers.map(u => (
                 <div key={u.id} onClick={() => setOpenChat({ id: u.id, full_name: u.name, username: u.name })} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                   <div style={{ position: 'relative' }}>
                     <div style={{ width: 56, height: 56, borderRadius: '50%', background: u.color + '22', border: `2.5px solid ${u.color}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>{u.flag}</div>
@@ -494,7 +516,7 @@ export default function Dashboard({
               </button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, padding: '0 16px 16px' }}>
-              {DEMO_USERS.map((u, i) => (
+              {realUsers.map((u, i) => (
                 <div
                   key={u.id}
                   onClick={() => setOpenChat({ id: u.id, full_name: u.name, username: u.name })}
