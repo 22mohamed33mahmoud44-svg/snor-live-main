@@ -12,6 +12,7 @@ const VideoCall       = lazy(() => import('./VideoCall'));
 const Dashboard       = lazy(() => import('./Dashboard'));
 const Navbar          = lazy(() => import('./components/Navbar'));
 const Home            = lazy(() => import('./pages/Home'));
+const PaymentSuccess  = lazy(() => import('./pages/PaymentSuccess'));
 
 const Loading = () => (
   <div style={{ position:'fixed', inset:0, background:'#000', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 }}>
@@ -39,6 +40,13 @@ function App() {
 
   const t   = translations[lang];
   const dir = lang === 'ar' ? 'rtl' : 'ltr';
+
+  // ── Payment Success ──
+  if (window.location.pathname === '/payment/success') return (
+    <Suspense fallback={<Loading />}>
+      <PaymentSuccess />
+    </Suspense>
+  );
 
   useEffect(() => {
     document.documentElement.lang = lang;
