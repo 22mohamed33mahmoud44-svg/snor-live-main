@@ -16,17 +16,15 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   {
-    urls: [
-      'turn:global.relay.metered.ca:80',
-      'turn:global.relay.metered.ca:443',
-      'turns:global.relay.metered.ca:443',
-    ],
+    urls: ['turn:global.relay.metered.ca:80','turn:global.relay.metered.ca:443','turns:global.relay.metered.ca:443'],
     username: '33c573ac1dd5ec4a29556327',
     credential: 'UuRkAsEjWoPrAG8Y',
   },
 ];
 
 type ErrorType = 'camera_denied' | 'camera_not_found' | 'connection_timeout' | 'connection_failed' | null;
+
+const GIFTS = ['🎁','🌹','💎','👑','🔥','💫'];
 
 export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext }: Props) {
   const localVideoRef  = useRef<HTMLVideoElement>(null);
@@ -37,43 +35,40 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
   const chatChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const isMounted      = useRef(true);
   const connectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const iceCandidateQueue = useRef<RTCIceCandidateInit[]>([]);
-  const remoteDescSet     = useRef(false);
-  const offerSent         = useRef(false);
-  const isOfferer         = useRef(false);
+  const remoteDescSet  = useRef(false);
+  const offerSent      = useRef(false);
+  const isOfferer      = useRef(false);
 
   const [muted,        setMuted]        = useState(false);
   const [camOff,       setCamOff]       = useState(false);
-  const [mirrored,     setMirrored]     = useState(true);
   const [duration,     setDuration]     = useState(0);
   const [messages,     setMessages]     = useState<{ id: string; sender_id: string; message: string }[]>([]);
   const [input,        setInput]        = useState('');
   const [showChat,     setShowChat]     = useState(false);
   const [connected,    setConnected]    = useState(false);
-  const [showControls, setShowControls] = useState(true);
   const [newMsg,       setNewMsg]       = useState(false);
   const [error,        setError]        = useState<ErrorType>(null);
-  const controlsTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [remoteProfile, setRemoteProfile] = useState<{ username: string; avatar_url: string | null } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const log = useCallback((msg: string) => console.log('🎥 VideoCall:', msg), []);
+  const log = useCallback((msg: string) => console.log('🎥', msg), []);
+
+  useEffect(() => {
+    if (!remoteUserId) return;
+    supabase.from('profiles').select('username, avatar_url').eq('id', remoteUserId).single()
+      .then(({ data }) => { if (data) setRemoteProfile(data); });
+  }, [remoteUserId]);
 
   const sendSignal = useCallback(async (type: string, data: unknown) => {
-    const { error } = await supabase.from('signals').insert({
-      match_id: matchId, type, data, sender: userId,
-    });
-    if (error) log(`send ${type} failed: ${error.message}`);
-  }, [matchId, userId, log]);
+    await supabase.from('signals').insert({ match_id: matchId, type, data, sender: userId });
+  }, [matchId, userId]);
 
   const flushIceCandidates = useCallback(async () => {
-    const peer  = peerRef.current;
+    const peer = peerRef.current;
     const queue = iceCandidateQueue.current.splice(0);
     if (!peer || queue.length === 0) return;
-    for (const c of queue) {
-      try { await peer.addIceCandidate(new RTCIceCandidate(c)); }
-      catch (e) { console.warn('ICE flush error:', e); }
-    }
+    for (const c of queue) { try { await peer.addIceCandidate(new RTCIceCandidate(c)); } catch {} }
   }, []);
 
   const applyRemoteDescription = useCallback(async (peer: RTCPeerConnection, sdp: RTCSessionDescriptionInit) => {
@@ -83,15 +78,6 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
     await flushIceCandidates();
   }, [flushIceCandidates]);
 
-  const resetControlsTimer = useCallback(() => {
-    setShowControls(true);
-    if (controlsTimer.current) clearTimeout(controlsTimer.current);
-    controlsTimer.current = setTimeout(() => {
-      if (!showChat) setShowControls(false);
-    }, 4000);
-  }, [showChat]);
-
-  // ── End match & update status ──
   const endMatch = useCallback(async () => {
     await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId);
     await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId });
@@ -99,44 +85,23 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
     streamRef.current?.getTracks().forEach(t => t.stop());
   }, [matchId, userId]);
 
-  const handleEnd = useCallback(async () => {
-    await endMatch();
-    onEnd();
-  }, [endMatch, onEnd]);
+  const handleEnd  = useCallback(async () => { await endMatch(); onEnd();  }, [endMatch, onEnd]);
+  const handleNext = useCallback(async () => { await endMatch(); onNext(); }, [endMatch, onNext]);
 
-  // ── Next: end then auto-start new match ──
-  const handleNext = useCallback(async () => {
-    await endMatch();
-    onNext();
-  }, [endMatch, onNext]);
+  useEffect(() => { const t = setInterval(() => setDuration(d => d + 1), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   useEffect(() => {
-    resetControlsTimer();
-    return () => { if (controlsTimer.current) clearTimeout(controlsTimer.current); };
-  }, []);
-
-  useEffect(() => {
-    const t = setInterval(() => setDuration(d => d + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  useEffect(() => {
-    isMounted.current         = true;
-    remoteDescSet.current     = false;
-    offerSent.current         = false;
-    isOfferer.current         = false;
+    isMounted.current = true;
+    remoteDescSet.current = false;
+    offerSent.current = false;
+    isOfferer.current = false;
     iceCandidateQueue.current = [];
 
     const cleanup = () => {
       if (connectionTimer.current) clearTimeout(connectionTimer.current);
-      peerRef.current?.close();
-      peerRef.current = null;
-      streamRef.current?.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
+      peerRef.current?.close(); peerRef.current = null;
+      streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null;
       if (localVideoRef.current)  localVideoRef.current.srcObject  = null;
       if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
       if (sigChannelRef.current)  { supabase.removeChannel(sigChannelRef.current);  sigChannelRef.current  = null; }
@@ -150,47 +115,24 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
         streamRef.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-        // ── Connection timeout: 30s ──
-        connectionTimer.current = setTimeout(() => {
-          if (!isMounted.current || connected) return;
-          setError('connection_timeout');
-        }, 30000);
+        connectionTimer.current = setTimeout(() => { if (isMounted.current) setError('connection_timeout'); }, 30000);
 
         const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         peerRef.current = peer;
 
         peer.onconnectionstatechange = () => {
           if (!isMounted.current) return;
-          const state = peer.connectionState;
-          if (state === 'connected') {
-            setConnected(true);
-            setError(null);
-            if (connectionTimer.current) clearTimeout(connectionTimer.current);
-          }
-          if (state === 'failed') {
-            setError('connection_failed');
-            peer.restartIce();
-          }
-          if (state === 'disconnected') setConnected(false);
+          if (peer.connectionState === 'connected') { setConnected(true); setError(null); if (connectionTimer.current) clearTimeout(connectionTimer.current); }
+          if (peer.connectionState === 'failed') { setError('connection_failed'); peer.restartIce(); }
+          if (peer.connectionState === 'disconnected') setConnected(false);
         };
 
         stream.getTracks().forEach(t => peer.addTrack(t, stream));
+        peer.ontrack = e => { if (remoteVideoRef.current && e.streams[0]) remoteVideoRef.current.srcObject = e.streams[0]; };
+        peer.onicecandidate = e => { if (e.candidate && isMounted.current) sendSignal('candidate', e.candidate.toJSON()); };
 
-        peer.ontrack = e => {
-          if (remoteVideoRef.current && e.streams[0])
-            remoteVideoRef.current.srcObject = e.streams[0];
-        };
-
-        peer.onicecandidate = e => {
-          if (!e.candidate || !isMounted.current) return;
-          sendSignal('candidate', e.candidate.toJSON());
-        };
-
-        const channelName = `vc-${matchId}-${Date.now()}`;
-        const sigChannel = supabase
-          .channel(channelName)
-          .on('postgres_changes',
-            { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` },
+        const sigChannel = supabase.channel(`vc-${matchId}-${Date.now()}`)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` },
             async payload => {
               if (!isMounted.current) return;
               const msg = payload.new as { sender: string; type: string; data: any };
@@ -198,104 +140,49 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
               const p = peerRef.current;
               if (!p || p.signalingState === 'closed') return;
               try {
-                if (msg.type === 'offer') {
-                  if (isOfferer.current || p.signalingState !== 'stable') return;
-                  await applyRemoteDescription(p, msg.data);
-                  const answer = await p.createAnswer();
-                  await p.setLocalDescription(answer);
-                  await sendSignal('answer', answer);
-                  return;
-                }
-                if (msg.type === 'answer') {
-                  if (!isOfferer.current || p.signalingState !== 'have-local-offer') return;
-                  await applyRemoteDescription(p, msg.data);
-                  return;
-                }
-                if (msg.type === 'candidate') {
-                  if (remoteDescSet.current) {
-                    await p.addIceCandidate(new RTCIceCandidate(msg.data));
-                  } else {
-                    iceCandidateQueue.current.push(msg.data);
-                  }
-                  return;
-                }
-                if (msg.type === 'end') {
-                  if (isMounted.current) onEnd();
-                  return;
-                }
+                if (msg.type === 'offer' && !isOfferer.current && p.signalingState === 'stable') { await applyRemoteDescription(p, msg.data); const ans = await p.createAnswer(); await p.setLocalDescription(ans); await sendSignal('answer', ans); }
+                else if (msg.type === 'answer' && isOfferer.current && p.signalingState === 'have-local-offer') { await applyRemoteDescription(p, msg.data); }
+                else if (msg.type === 'candidate') { if (remoteDescSet.current) await p.addIceCandidate(new RTCIceCandidate(msg.data)); else iceCandidateQueue.current.push(msg.data); }
+                else if (msg.type === 'end') { if (isMounted.current) onEnd(); }
               } catch (err: any) { log(`signal error: ${err.message}`); }
             })
-          .subscribe(status => {
-            if (status !== 'SUBSCRIBED' || !isMounted.current) return;
-            if (offerSent.current) return;
-
+          .subscribe(async status => {
+            if (status !== 'SUBSCRIBED' || !isMounted.current || offerSent.current) return;
             const shouldOffer = !!remoteUserId && userId < remoteUserId;
             isOfferer.current = shouldOffer;
-
             if (!shouldOffer) {
-              const POLL_INTERVAL = 1500;
-              const POLL_TIMEOUT  = 30000;
-              const pollStart     = Date.now();
-              const pollForOffer  = async () => {
-                if (!isMounted.current || remoteDescSet.current) return;
-                if (Date.now() - pollStart > POLL_TIMEOUT) return;
+              const pollStart = Date.now();
+              const poll = async () => {
+                if (!isMounted.current || remoteDescSet.current || Date.now() - pollStart > 30000) return;
                 const p = peerRef.current;
                 if (!p || p.signalingState === 'closed') return;
                 try {
-                  const { data, error } = await supabase
-                    .from('signals').select('*')
-                    .eq('match_id', matchId).eq('type', 'offer').neq('sender', userId)
-                    .order('created_at', { ascending: false }).limit(1).single();
-                  if (error || !data) { setTimeout(pollForOffer, POLL_INTERVAL); return; }
+                  const { data } = await supabase.from('signals').select('*').eq('match_id', matchId).eq('type', 'offer').neq('sender', userId).order('created_at', { ascending: false }).limit(1).single();
+                  if (!data) { setTimeout(poll, 1500); return; }
                   if (remoteDescSet.current || p.signalingState !== 'stable') return;
                   await applyRemoteDescription(p, data.data);
-                  const answer = await p.createAnswer();
-                  await p.setLocalDescription(answer);
-                  await sendSignal('answer', answer);
-                  const { data: candidates } = await supabase
-                    .from('signals').select('*')
-                    .eq('match_id', matchId).eq('type', 'candidate').neq('sender', userId)
-                    .order('created_at', { ascending: true });
-                  if (candidates) {
-                    for (const row of candidates) {
-                      try { await peer.addIceCandidate(new RTCIceCandidate(row.data)); }
-                      catch (e) { console.warn(e); }
-                    }
-                  }
-                } catch (err: any) { setTimeout(pollForOffer, POLL_INTERVAL); }
+                  const ans = await p.createAnswer(); await p.setLocalDescription(ans); await sendSignal('answer', ans);
+                  const { data: cands } = await supabase.from('signals').select('*').eq('match_id', matchId).eq('type', 'candidate').neq('sender', userId).order('created_at', { ascending: true });
+                  if (cands) for (const row of cands) { try { await peer.addIceCandidate(new RTCIceCandidate(row.data)); } catch {} }
+                } catch { setTimeout(poll, 1500); }
               };
-              pollForOffer();
-              return;
+              poll(); return;
             }
-
             offerSent.current = true;
-            (async () => {
-              const p = peerRef.current;
-              if (!p || p.signalingState !== 'stable') return;
-              const offer = await p.createOffer();
-              await p.setLocalDescription(offer);
-              await sendSignal('offer', offer);
-            })();
+            const p = peerRef.current;
+            if (!p || p.signalingState !== 'stable') return;
+            const offer = await p.createOffer(); await p.setLocalDescription(offer); await sendSignal('offer', offer);
           });
 
         sigChannelRef.current = sigChannel;
-
-        const chatChannel = supabase
-          .channel(`chat-${matchId}-${userId}-${Date.now()}`)
-          .on('postgres_changes',
-            { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` },
-            payload => {
-              if (isMounted.current) {
-                setMessages(prev => [...prev, payload.new as any]);
-                setNewMsg(true);
-              }
-            })
+        const chatChannel = supabase.channel(`chat-${matchId}-${userId}-${Date.now()}`)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` },
+            payload => { if (isMounted.current) { setMessages(prev => [...prev, payload.new as any]); setNewMsg(true); } })
           .subscribe();
         chatChannelRef.current = chatChannel;
 
       } catch (err: any) {
-        log(`fatal: ${err.message}`);
-        if (err.name === 'NotAllowedError')  setError('camera_denied');
+        if (err.name === 'NotAllowedError') setError('camera_denied');
         else if (err.name === 'NotFoundError') setError('camera_not_found');
         else setError('connection_failed');
       }
@@ -305,263 +192,190 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
     return () => { isMounted.current = false; cleanup(); };
   }, [matchId, userId, remoteUserId]);
 
-  const toggleMute = () => {
-    const track = streamRef.current?.getAudioTracks()[0];
-    if (track) { track.enabled = !track.enabled; setMuted(m => !m); }
-  };
-
-  const toggleCam = () => {
-    const track = streamRef.current?.getVideoTracks()[0];
-    if (track) { track.enabled = !track.enabled; setCamOff(c => !c); }
-  };
+  const toggleMute = () => { const t = streamRef.current?.getAudioTracks()[0]; if (t) { t.enabled = !t.enabled; setMuted(m => !m); } };
+  const toggleCam  = () => { const t = streamRef.current?.getVideoTracks()[0]; if (t) { t.enabled = !t.enabled; setCamOff(c => !c); } };
 
   const sendMessage = async () => {
-    const text = input.trim();
-    if (!text) return;
+    const text = input.trim(); if (!text) return;
     setInput('');
     await supabase.from('messages').insert({ match_id: matchId, sender_id: userId, message: text });
   };
 
-  const openChat = () => {
-    setShowChat(true);
-    setNewMsg(false);
-    setShowControls(true);
-    if (controlsTimer.current) clearTimeout(controlsTimer.current);
-  };
-
-  const closeChat = () => {
-    setShowChat(false);
-    resetControlsTimer();
-  };
-
   // ── Error Screen ──
   if (error) {
-    const errorMessages: Record<NonNullable<ErrorType>, { icon: string; title: string; desc: string; showRetry: boolean; showEnd: boolean }> = {
-      camera_denied: {
-        icon: '🚫',
-        title: 'تم رفض الكاميرا',
-        desc: 'يرجى السماح بالوصول للكاميرا والميكروفون من إعدادات المتصفح',
-        showRetry: false,
-        showEnd: true,
-      },
-      camera_not_found: {
-        icon: '📷',
-        title: 'كاميرا غير موجودة',
-        desc: 'تأكد إن الكاميرا متوصلة وشغالة',
-        showRetry: true,
-        showEnd: true,
-      },
-      connection_timeout: {
-        icon: '⏱️',
-        title: 'انتهى وقت الاتصال',
-        desc: 'لم يتم الاتصال بالطرف الآخر، جرب مرة أخرى',
-        showRetry: true,
-        showEnd: true,
-      },
-      connection_failed: {
-        icon: '📡',
-        title: 'فشل الاتصال',
-        desc: 'حدث خطأ في الاتصال، جرب مرة أخرى',
-        showRetry: true,
-        showEnd: true,
-      },
+    const errs = {
+      camera_denied:      { icon: '🚫', title: 'تم رفض الكاميرا',    desc: 'اسمح بالوصول للكاميرا من المتصفح', retry: false },
+      camera_not_found:   { icon: '📷', title: 'كاميرا غير موجودة', desc: 'تأكد إن الكاميرا متوصلة',           retry: true  },
+      connection_timeout: { icon: '⏱️', title: 'انتهى وقت الاتصال', desc: 'جرب مرة أخرى',                     retry: true  },
+      connection_failed:  { icon: '📡', title: 'فشل الاتصال',        desc: 'حدث خطأ، جرب مرة أخرى',           retry: true  },
     };
-
-    const e = errorMessages[error];
+    const e = errs[error];
     return (
-      <div style={{
-        position: 'fixed', inset: 0, background: '#0a0a14',
-        display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center',
-        fontFamily: 'Cairo, sans-serif', direction: 'rtl', zIndex: 1000,
-      }}>
-        <div style={{ fontSize: 64, marginBottom: 16 }}>{e.icon}</div>
-        <h2 style={{ color: '#fff', fontSize: 22, fontWeight: 700, margin: '0 0 8px' }}>{e.title}</h2>
-        <p style={{ color: '#888', fontSize: 14, textAlign: 'center', maxWidth: 280, margin: '0 0 32px' }}>{e.desc}</p>
-        <div style={{ display: 'flex', gap: 12 }}>
-          {e.showRetry && (
-            <button
-              onClick={() => { setError(null); window.location.reload(); }}
-              style={{
-                padding: '12px 28px', background: '#6366f1', border: 'none',
-                borderRadius: 12, color: '#fff', fontSize: 16,
-                fontFamily: 'Cairo, sans-serif', cursor: 'pointer', fontWeight: 700,
-              }}
-            >
-              إعادة المحاولة
-            </button>
-          )}
-          {e.showEnd && (
-            <button
-              onClick={onEnd}
-              style={{
-                padding: '12px 28px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
-                borderRadius: 12, color: '#fff', fontSize: 16,
-                fontFamily: 'Cairo, sans-serif', cursor: 'pointer', fontWeight: 700,
-              }}
-            >
-              الرجوع
-            </button>
-          )}
+      <div style={{ position:'fixed',inset:0,background:'#6B21A8',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'Cairo,sans-serif',direction:'rtl',zIndex:1000 }}>
+        <div style={{ fontSize:72,marginBottom:20 }}>{e.icon}</div>
+        <h2 style={{ color:'#fff',fontSize:24,fontWeight:800,margin:'0 0 8px' }}>{e.title}</h2>
+        <p style={{ color:'rgba(255,255,255,0.7)',fontSize:15,margin:'0 0 40px',textAlign:'center',maxWidth:260 }}>{e.desc}</p>
+        <div style={{ display:'flex',gap:12 }}>
+          {e.retry && <button onClick={() => { setError(null); window.location.reload(); }} style={{ padding:'14px 32px',background:'#fff',border:'none',borderRadius:50,color:'#6B21A8',fontSize:16,fontFamily:'Cairo,sans-serif',cursor:'pointer',fontWeight:800 }}>إعادة المحاولة</button>}
+          <button onClick={onEnd} style={{ padding:'14px 32px',background:'rgba(255,255,255,0.15)',border:'2px solid rgba(255,255,255,0.3)',borderRadius:50,color:'#fff',fontSize:16,fontFamily:'Cairo,sans-serif',cursor:'pointer',fontWeight:800 }}>الرجوع</button>
         </div>
       </div>
     );
   }
 
+  // ── Connecting Screen ──
+  if (!connected) {
+    const initials = remoteProfile?.username?.slice(0,2).toUpperCase() ?? '؟';
+    return (
+      <div style={{ position:'fixed',inset:0,background:'linear-gradient(180deg,#7C3AED 0%,#5B21B6 100%)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'Cairo,sans-serif',direction:'rtl',zIndex:1000 }}>
+        <style>{`
+          @keyframes spin-ring { to { transform: rotate(360deg); } }
+          @keyframes pulse-avatar { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+        `}</style>
+
+        <p style={{ color:'rgba(255,255,255,0.9)',fontSize:20,fontWeight:700,marginBottom:48 }}>جاري الإتصال.......</p>
+
+        <div style={{ position:'relative',width:160,height:160,marginBottom:32 }}>
+          <svg style={{ position:'absolute',inset:0,animation:'spin-ring 2s linear infinite' }} viewBox="0 0 160 160" width="160" height="160">
+            <circle cx="80" cy="80" r="76" fill="none" stroke="url(#ringGrad)" strokeWidth="4" strokeLinecap="round" strokeDasharray="300 180"/>
+            <defs>
+              <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#f43f5e"/>
+                <stop offset="100%" stopColor="#fb923c"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div style={{ position:'absolute',inset:8,borderRadius:'50%',overflow:'hidden',animation:'pulse-avatar 2s ease-in-out infinite',background:'#4C1D95',display:'flex',alignItems:'center',justifyContent:'center' }}>
+            {remoteProfile?.avatar_url
+              ? <img src={remoteProfile.avatar_url} alt="" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
+              : <span style={{ color:'#fff',fontSize:36,fontWeight:800 }}>{initials}</span>
+            }
+          </div>
+        </div>
+
+        {remoteProfile && (
+          <>
+            <p style={{ color:'#fff',fontSize:22,fontWeight:800,margin:'0 0 8px' }}>✨ {remoteProfile.username}</p>
+            <div style={{ display:'flex',gap:8,marginBottom:48 }}>
+              <span style={{ background:'rgba(255,255,255,0.15)',color:'#fff',padding:'4px 16px',borderRadius:20,fontSize:13,fontWeight:600 }}>مستخدم</span>
+            </div>
+          </>
+        )}
+
+        <button onClick={handleNext} style={{ background:'rgba(255,255,255,0.15)',border:'2px solid rgba(255,255,255,0.4)',borderRadius:50,padding:'14px 60px',color:'#fff',fontSize:18,fontWeight:800,fontFamily:'Cairo,sans-serif',cursor:'pointer',letterSpacing:1 }}>
+          التالي
+        </button>
+      </div>
+    );
+  }
+
+  // ── Active Call Screen ──
+  const initials = remoteProfile?.username?.slice(0,2).toUpperCase() ?? '؟';
+
   return (
-    <div
-      style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 1000 }}
-      onClick={resetControlsTimer}
-    >
+    <div style={{ position:'fixed',inset:0,background:'#0a0a14',zIndex:1000,overflow:'hidden' }}>
       <style>{STYLES}</style>
 
-      <video
-        ref={remoteVideoRef}
-        autoPlay playsInline
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-      />
+      {/* Remote video fullscreen */}
+      <video ref={remoteVideoRef} autoPlay playsInline
+        style={{ position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover' }}/>
 
-      {!connected && (
-        <div className="vc-connecting">
-          <div className="vc-connecting-ring" />
-          <div className="vc-connecting-ring" style={{ animationDelay: '0.4s' }} />
-          <div className="vc-connecting-ring" style={{ animationDelay: '0.8s' }} />
-          <span className="vc-connecting-text">جاري الاتصال…</span>
-        </div>
-      )}
-
-      <div className="vc-grad-top" />
-      <div className="vc-grad-bottom" />
-
-      <div className="vc-pip-wrap">
-        <video
-          ref={localVideoRef}
-          autoPlay playsInline muted
-          className="vc-pip-video"
-          style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)', transition: 'transform 0.3s ease' }}
-        />
-        {camOff && (
-          <div className="vc-pip-off">
-            <span style={{ fontSize: '1.6rem' }}>📷</span>
-          </div>
-        )}
+      {/* Local video - top left small */}
+      <div style={{ position:'absolute',top:100,left:8,width:90,height:130,borderRadius:12,overflow:'hidden',border:'2px solid rgba(255,255,255,0.2)',zIndex:10,background:'#111' }}>
+        <video ref={localVideoRef} autoPlay playsInline muted
+          style={{ width:'100%',height:'100%',objectFit:'cover',opacity:camOff?0:1,transform:'scaleX(-1)' }}/>
+        {camOff && <div style={{ position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',background:'#1a1a2e',fontSize:28 }}>📷</div>}
       </div>
 
-      <div className={`vc-topbar ${showControls ? 'vc-topbar--visible' : ''}`}>
-        <div className="vc-status">
-          <span className={`vc-dot ${connected ? 'vc-dot--on' : 'vc-dot--wait'}`} />
-          <span className="vc-timer">{fmt(duration)}</span>
-        </div>
+      {/* Top controls - left */}
+      <div style={{ position:'absolute',top:24,left:16,display:'flex',gap:10,zIndex:20 }}>
+        <button onClick={handleEnd} className="vc-ctrl-btn" style={{ background:'rgba(0,0,0,0.5)' }}>🔒</button>
+        <button onClick={toggleMute} className="vc-ctrl-btn" style={{ background: muted ? 'rgba(239,68,68,0.7)' : 'rgba(0,0,0,0.5)' }}>{muted ? '🔇' : '🔊'}</button>
+        <button onClick={toggleCam} className="vc-ctrl-btn" style={{ background: camOff ? 'rgba(239,68,68,0.7)' : 'rgba(0,0,0,0.5)' }}>🎤</button>
       </div>
 
-      {showChat && (
-        <div className="vc-chat">
-          <div className="vc-chat-header">
-            <span className="vc-chat-title">💬 الشات</span>
-            <button className="vc-chat-close" onClick={closeChat}>✕</button>
+      {/* Timer - top right */}
+      <div style={{ position:'absolute',top:24,right:60,zIndex:20,background:'rgba(0,0,0,0.4)',padding:'6px 14px',borderRadius:20,display:'flex',alignItems:'center',gap:8 }}>
+        <span style={{ color:'#fff',fontSize:15,fontWeight:700,fontFamily:'Cairo,sans-serif' }}>{fmt(duration)}</span>
+      </div>
+
+      {/* Next arrow button - right side */}
+      <button onClick={handleNext} style={{ position:'absolute',top:'50%',right:0,transform:'translateY(-50%)',zIndex:20,background:'rgba(0,0,0,0.4)',border:'none',borderRadius:'12px 0 0 12px',padding:'20px 12px',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center' }}>
+        <span style={{ color:'#fff',fontSize:28 }}>›</span>
+      </button>
+
+      {/* Gifts sidebar - left */}
+      <div style={{ position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',zIndex:20,display:'flex',flexDirection:'column',gap:8 }}>
+        {GIFTS.map((g,i) => (
+          <div key={i} style={{ display:'flex',flexDirection:'column',alignItems:'center',gap:2 }}>
+            <button style={{ width:44,height:44,borderRadius:12,background:'rgba(0,0,0,0.4)',border:'none',cursor:'pointer',fontSize:22,display:'flex',alignItems:'center',justifyContent:'center' }}>{g}</button>
+            <span style={{ color:'#fff',fontSize:10,fontFamily:'Cairo,sans-serif' }}>
+              <span style={{ color:'#facc15' }}>🪙</span> 30
+            </span>
           </div>
-          <div className="vc-chat-messages">
-            {messages.length === 0 && <p className="vc-chat-empty">لا توجد رسائل بعد</p>}
-            {messages.map((msg, i) => (
-              <div key={i} className={`vc-msg ${msg.sender_id === userId ? 'vc-msg--me' : 'vc-msg--them'}`}>
+        ))}
+      </div>
+
+      {/* Bottom - user info + chat */}
+      <div style={{ position:'absolute',bottom:0,left:0,right:0,zIndex:20,padding:'0 12px 20px' }}>
+
+        {/* Chat messages */}
+        {showChat && (
+          <div style={{ marginBottom:8,maxHeight:180,overflowY:'auto',display:'flex',flexDirection:'column',gap:6 }} className="vc-chat-scroll">
+            {messages.length === 0 && <p style={{ color:'rgba(255,255,255,0.4)',fontSize:13,textAlign:'center',fontFamily:'Cairo,sans-serif' }}>لا توجد رسائل بعد</p>}
+            {messages.map((msg,i) => (
+              <div key={i} style={{ alignSelf: msg.sender_id===userId?'flex-end':'flex-start',background:msg.sender_id===userId?'rgba(124,58,237,0.85)':'rgba(0,0,0,0.55)',color:'#fff',padding:'8px 14px',borderRadius:18,fontSize:14,fontFamily:'Cairo,sans-serif',maxWidth:'75%',wordBreak:'break-word' }}>
                 {msg.message}
               </div>
             ))}
-            <div ref={messagesEndRef} />
+            <div ref={messagesEndRef}/>
           </div>
-          <div className="vc-chat-input-row">
-            <input
-              className="vc-chat-input"
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && sendMessage()}
-              placeholder="اكتب رسالة…"
-            />
-            <button className="vc-chat-send" onClick={sendMessage}>↑</button>
+        )}
+
+        {/* User info card */}
+        <div style={{ display:'flex',alignItems:'center',gap:12,marginBottom:12 }}>
+          <button onClick={handleEnd} style={{ width:44,height:44,borderRadius:50,background:'rgba(0,0,0,0.5)',border:'none',cursor:'pointer',fontSize:20,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff' }}>+</button>
+          <div style={{ flex:1,background:'rgba(0,0,0,0.45)',borderRadius:24,padding:'8px 16px',display:'flex',alignItems:'center',gap:10 }}>
+            <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#7C3AED,#db2777)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:800,overflow:'hidden',flexShrink:0 }}>
+              {remoteProfile?.avatar_url
+                ? <img src={remoteProfile.avatar_url} alt="" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
+                : initials
+              }
+            </div>
+            <div>
+              <p style={{ color:'#fff',fontSize:14,fontWeight:800,margin:0,fontFamily:'Cairo,sans-serif' }}>✨ {remoteProfile?.username ?? 'مستخدم'}</p>
+              <p style={{ color:'rgba(255,255,255,0.6)',fontSize:12,margin:0,fontFamily:'Cairo,sans-serif' }}>🌍 مصر</p>
+            </div>
           </div>
+          {remoteProfile?.avatar_url && (
+            <div style={{ width:44,height:44,borderRadius:'50%',overflow:'hidden',border:'2px solid rgba(255,255,255,0.3)',flexShrink:0 }}>
+              <img src={remoteProfile.avatar_url} alt="" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
+            </div>
+          )}
         </div>
-      )}
 
-      <div className={`vc-controls ${showControls ? 'vc-controls--visible' : ''}`}>
-        <button className={`vc-btn ${muted ? 'vc-btn--off' : ''}`} onClick={toggleMute}>
-          <span className="vc-btn-icon">{muted ? '🔇' : '🎙️'}</span>
-          <span className="vc-btn-label">{muted ? 'صوت' : 'كتم'}</span>
-        </button>
-
-        <button className={`vc-btn ${camOff ? 'vc-btn--off' : ''}`} onClick={toggleCam}>
-          <span className="vc-btn-icon">{camOff ? '📷' : '📹'}</span>
-          <span className="vc-btn-label">{camOff ? 'كاميرا' : 'إيقاف'}</span>
-        </button>
-
-        <button className="vc-btn" onClick={() => setMirrored(m => !m)}>
-          <span className="vc-btn-icon">🔄</span>
-          <span className="vc-btn-label">{mirrored ? 'طبيعي' : 'معكوس'}</span>
-        </button>
-
-        <button className={`vc-btn ${showChat ? 'vc-btn--active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}>
-          <span className="vc-btn-icon">💬</span>
-          <span className="vc-btn-label">شات</span>
-          {newMsg && !showChat && <span className="vc-badge" />}
-        </button>
-
-        <button className="vc-btn" onClick={handleNext}>
-          <span className="vc-btn-icon">⏭️</span>
-          <span className="vc-btn-label">التالي</span>
-        </button>
-
-        <button className="vc-btn vc-btn--end" onClick={handleEnd}>
-          <span className="vc-btn-icon">📵</span>
-          <span className="vc-btn-label">إنهاء</span>
-        </button>
+        {/* Chat input */}
+        <div style={{ display:'flex',gap:8,alignItems:'center' }}>
+          <button onClick={()=>{setShowChat(s=>!s);setNewMsg(false)}} style={{ width:44,height:44,borderRadius:50,background:'rgba(0,0,0,0.5)',border:'none',cursor:'pointer',fontSize:20,display:'flex',alignItems:'center',justifyContent:'center',position:'relative',flexShrink:0 }}>
+            💬
+            {newMsg && !showChat && <span style={{ position:'absolute',top:2,right:2,width:10,height:10,borderRadius:'50%',background:'#f43f5e' }}/>}
+          </button>
+          <div style={{ flex:1,background:'rgba(0,0,0,0.45)',borderRadius:24,display:'flex',alignItems:'center',padding:'0 16px',height:44 }}>
+            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendMessage()}
+              placeholder="أرسل رسالة..." style={{ flex:1,background:'none',border:'none',outline:'none',color:'#fff',fontSize:14,fontFamily:'Cairo,sans-serif',direction:'rtl' }}/>
+          </div>
+          <button onClick={sendMessage} style={{ width:44,height:44,borderRadius:50,background:'rgba(0,0,0,0.5)',border:'none',cursor:'pointer',fontSize:20,flexShrink:0 }}>
+            🌐
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
-  .vc-grad-top { position:absolute;top:0;left:0;right:0;height:120px;background:linear-gradient(to bottom,rgba(0,0,0,.55) 0%,transparent 100%);pointer-events:none;z-index:2; }
-  .vc-grad-bottom { position:absolute;bottom:0;left:0;right:0;height:180px;background:linear-gradient(to top,rgba(0,0,0,.75) 0%,transparent 100%);pointer-events:none;z-index:2; }
-  .vc-connecting { position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;background:rgba(0,0,0,.6); }
-  .vc-connecting-ring { position:absolute;width:80px;height:80px;border-radius:50%;border:2px solid rgba(255,255,255,.25);animation:vc-ping 1.8s ease-out infinite; }
-  @keyframes vc-ping { 0%{transform:scale(1);opacity:.7} 100%{transform:scale(3.5);opacity:0} }
-  .vc-connecting-text { font-family:'Cairo',sans-serif;font-size:1rem;color:rgba(255,255,255,.7);letter-spacing:.05em;z-index:1;margin-top:60px; }
-  .vc-pip-wrap { position:absolute;bottom:100px;right:16px;width:100px;aspect-ratio:3/4;border-radius:16px;overflow:hidden;border:1.5px solid rgba(255,255,255,.18);box-shadow:0 8px 32px rgba(0,0,0,.5);z-index:10;background:#111; }
-  .vc-pip-video { width:100%;height:100%;object-fit:cover;transition:opacity .3s; }
-  .vc-pip-off { position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#1a1a2e; }
-  .vc-topbar { position:absolute;top:0;left:0;right:0;z-index:10;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;opacity:0;transition:opacity .35s ease; }
-  .vc-topbar--visible { opacity:1; }
-  .vc-status { display:flex;align-items:center;gap:8px; }
-  .vc-dot { width:8px;height:8px;border-radius:50%; }
-  .vc-dot--on { background:#4ade80;box-shadow:0 0 8px #4ade80;animation:vc-blink 2s ease-in-out infinite; }
-  .vc-dot--wait { background:#fbbf24;animation:vc-blink 1s ease-in-out infinite; }
-  @keyframes vc-blink { 0%,100%{opacity:1} 50%{opacity:.3} }
-  .vc-timer { font-family:'Cairo',sans-serif;font-size:.9rem;font-weight:700;color:#fff;letter-spacing:.08em; }
-  .vc-controls { position:absolute;bottom:0;left:0;right:0;z-index:10;padding:16px 20px 32px;display:flex;justify-content:center;align-items:center;gap:10px;opacity:0;transition:opacity .35s ease; }
-  .vc-controls--visible { opacity:1; }
-  .vc-btn { display:flex;flex-direction:column;align-items:center;gap:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);backdrop-filter:blur(12px);border-radius:18px;padding:10px 16px;color:#fff;cursor:pointer;min-width:62px;transition:all .2s ease;font-family:'Cairo',sans-serif; }
-  .vc-btn:active { transform:scale(.93); }
-  .vc-btn--off { background:rgba(255,255,255,.05);opacity:.5; }
-  .vc-btn--active { background:rgba(124,106,255,.35);border-color:rgba(124,106,255,.6); }
-  .vc-btn--end { background:rgba(220,38,38,.85);border-color:#dc2626;box-shadow:0 4px 20px rgba(220,38,38,.4); }
-  .vc-btn--end:hover { background:rgba(220,38,38,1); }
-  .vc-btn-icon { font-size:1.35rem;line-height:1; }
-  .vc-btn-label { font-size:.62rem;font-weight:600;opacity:.85;white-space:nowrap; }
-  .vc-badge { position:absolute;top:6px;right:10px;width:8px;height:8px;border-radius:50%;background:#f43f5e;box-shadow:0 0 6px #f43f5e;animation:vc-blink 1s infinite; }
-  .vc-chat { position:absolute;bottom:100px;left:12px;right:130px;z-index:15;border-radius:20px;background:rgba(10,10,20,.88);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(20px);display:flex;flex-direction:column;max-height:220px;box-shadow:0 16px 48px rgba(0,0,0,.5);animation:vc-slide-up .25s ease; }
-  @keyframes vc-slide-up { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
-  .vc-chat-header { display:flex;align-items:center;justify-content:space-between;padding:10px 14px 6px;border-bottom:1px solid rgba(255,255,255,.07); }
-  .vc-chat-title { font-family:'Cairo',sans-serif;font-size:.8rem;font-weight:700;color:rgba(255,255,255,.7); }
-  .vc-chat-close { background:none;border:none;color:rgba(255,255,255,.4);cursor:pointer;font-size:.8rem;padding:0;line-height:1; }
-  .vc-chat-messages { flex:1;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:6px;scrollbar-width:none; }
-  .vc-chat-messages::-webkit-scrollbar { display:none; }
-  .vc-chat-empty { text-align:center;color:rgba(255,255,255,.25);font-family:'Cairo',sans-serif;font-size:.75rem;margin:auto; }
-  .vc-msg { max-width:80%;font-family:'Cairo',sans-serif;font-size:.8rem;padding:6px 12px;border-radius:14px;line-height:1.4;word-break:break-word; }
-  .vc-msg--me { background:rgba(124,106,255,.75);color:#fff;align-self:flex-end;border-bottom-right-radius:4px; }
-  .vc-msg--them { background:rgba(255,255,255,.12);color:rgba(255,255,255,.9);align-self:flex-start;border-bottom-left-radius:4px; }
-  .vc-chat-input-row { display:flex;gap:6px;padding:8px 10px;border-top:1px solid rgba(255,255,255,.07); }
-  .vc-chat-input { flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:7px 12px;color:#fff;font-size:.8rem;font-family:'Cairo',sans-serif;outline:none;direction:rtl; }
-  .vc-chat-input::placeholder { color:rgba(255,255,255,.3); }
-  .vc-chat-send { width:34px;height:34px;border-radius:10px;background:rgba(124,106,255,.8);border:none;color:#fff;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s; }
-  .vc-chat-send:hover { background:rgba(124,106,255,1); }
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+  .vc-ctrl-btn { width:40px;height:40px;border-radius:50%;border:none;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center; }
+  .vc-chat-scroll::-webkit-scrollbar { display:none; }
+  .vc-chat-scroll { scrollbar-width:none; }
 `;
