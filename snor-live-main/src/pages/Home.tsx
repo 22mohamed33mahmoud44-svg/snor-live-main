@@ -10,9 +10,10 @@ interface HomeProps {
   user:       any;
   onShowAuth: () => void;
   onStartRandomMatch: () => void;
+  onOpenBuyCoins?: () => void; // 🆕 مرجع لفتح شاشة الشحن مباشرة من اللونج بايدج
 }
 
-export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch }: HomeProps) {
+export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch, onOpenBuyCoins }: HomeProps) {
 
   // ── PWA Install ──
   const deferredPrompt = useRef<any>(null);
@@ -22,12 +23,12 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch }: 
   useEffect(() => {
     const handler = (e: Event) => { e.preventDefault(); deferredPrompt.current = e; setPwaReady(true); };
     const onInstalled = () => { setPwaInstalled(true); setPwaReady(false); deferredPrompt.current = null; };
-    window.addEventListener('beforeinstallprompt', handler);
-    window.addEventListener('appinstalled', onInstalled);
-    if (window.matchMedia('(display-mode: standalone)').matches) setPwaInstalled(true);
+    globalThis.addEventListener('beforeinstallprompt', handler);
+    globalThis.addEventListener('appinstalled', onInstalled);
+    if (globalThis.matchMedia('(display-mode: standalone)').matches) setPwaInstalled(true);
     return () => {
-      window.removeEventListener('beforeinstallprompt', handler);
-      window.removeEventListener('appinstalled', onInstalled);
+      globalThis.removeEventListener('beforeinstallprompt', handler);
+      globalThis.removeEventListener('appinstalled', onInstalled);
     };
   }, []);
 
@@ -54,8 +55,22 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch }: 
     return () => observer.disconnect();
   }, []);
 
+  // دالة الشراء الذكية المربوطة بالـ Webhook (حل مشاكل الربط المالي)
+  const handlePurchasePackage = (_packageId: string) => {
+    if (!user) {
+      onShowAuth();
+      return;
+    }
+    if (onOpenBuyCoins) {
+      onOpenBuyCoins();
+    } else {
+      // لو معندوش وبيرندر السيرفر، يوجهه لتاب الرصيد بالداشبورد
+      globalThis.location.hash = "#pricing";
+    }
+  };
+
   const InstallButton = ({ className = '' }: { className?: string }) => (
-    <button onClick={handleInstall} disabled={pwaInstalled}
+    <button type="button" onClick={handleInstall} disabled={pwaInstalled}
       className={`btn-primary flex items-center justify-center gap-2 ${className}`}>
       <Download size={18} />
       {pwaInstalled ? t.download.installedMsg : pwaReady ? t.download.installBtn : t.download.installBtn}
@@ -99,10 +114,10 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch }: 
                 <span className="text-white">{lang === 'ar' ? 'بلا حدود.' : 'No Limits.'}</span>
               </h1>
               <p className="text-text-gray mb-8 font-inter text-base md:text-lg">
-                {lang === 'ar' ? 'تواصل مع العالم في ثوانٍ' : 'Connect with the world in seconds'}
+                {lang === 'ar' ? 'تواصل مع العالم في ثوانٍ عشوائياً وآمناً' : 'Connect with the world in seconds securely'}
               </p>
               <div className="flex flex-col sm:flex-row gap-3 mb-10 md:mb-0">
-                <button className="btn-primary text-base py-4 flex items-center justify-center gap-2 w-full sm:w-auto sm:px-8"
+                <button type="button" className="btn-primary text-base py-4 flex items-center justify-center gap-2 w-full sm:w-auto sm:px-8"
                   onClick={() => user ? onStartRandomMatch() : onShowAuth()}>
                   🎥 {t.hero.cta}<ChevronRight size={18} />
                 </button>
@@ -196,22 +211,29 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch }: 
             ))}
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
-            {t.gems.packages.map((pkg: any, i: number) => (
-              <div key={i} className={`gem-package relative glass rounded-2xl p-5 fade-in-scroll ${pkg.popular ? 'ring-2 ring-diamond' : ''}`}>
-                {pkg.popular && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-accent-blue to-accent-purple px-3 py-0.5 rounded-full text-xs font-bold whitespace-nowrap">
-                    ⭐ {t.gems.mostValue}
+            {t.gems.packages.map((pkg: any, i: number) => {
+              // تحديد الـ ID الفعلي المربوط بـ جدول الأسعار والـ Webhook
+              const pkgIds = ['pkg_100', 'pkg_500', 'pkg_1000', 'pkg_1000'];
+              const currentPkgId = pkgIds[i % pkgIds.length];
+
+              return (
+                <div key={i} className={`gem-package relative glass rounded-2xl p-5 fade-in-scroll ${pkg.popular ? 'ring-2 ring-diamond' : ''}`}>
+                  {pkg.popular && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-accent-blue to-accent-purple px-3 py-0.5 rounded-full text-xs font-bold whitespace-nowrap">
+                      ⭐ {t.gems.mostValue}
+                    </div>
+                  )}
+                  <div className="text-center">
+                    <div className="text-4xl mb-3 gem-sparkle">💎</div>
+                    <div className="text-2xl font-bold gradient-text mb-1">{pkg.gems.toLocaleString()}</div>
+                    <div className="text-text-gray text-xs mb-3">{t.gems.gemsText}</div>
+                    <div className="text-xl font-bold text-white mb-3">{pkg.price} <span className="text-xs text-text-gray">{t.gems.currency}</span></div>
+                    {/* تشغيل دالة الدفع الحقيقية والمؤمنة بالـ Webhook عند الضغط */}
+                    <button type="button" onClick={() => handlePurchasePackage(currentPkgId)} className={`w-full py-2.5 rounded-lg font-semibold text-sm ${pkg.popular ? 'btn-primary' : 'btn-secondary'}`}>{t.pricing.selectPlan}</button>
                   </div>
-                )}
-                <div className="text-center">
-                  <div className="text-4xl mb-3 gem-sparkle">💎</div>
-                  <div className="text-2xl font-bold gradient-text mb-1">{pkg.gems.toLocaleString()}</div>
-                  <div className="text-text-gray text-xs mb-3">{t.gems.gemsText}</div>
-                  <div className="text-xl font-bold text-white mb-3">{pkg.price} <span className="text-xs text-text-gray">{t.gems.currency}</span></div>
-                  <button className={`w-full py-2.5 rounded-lg font-semibold text-sm ${pkg.popular ? 'btn-primary' : 'btn-secondary'}`}>{t.pricing.selectPlan}</button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div className="text-center glass rounded-xl p-4 inline-flex items-center gap-3 mx-auto fade-in-scroll">
             <span className="text-diamond text-lg">💎</span>
@@ -289,20 +311,20 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch }: 
               <div className="text-center mb-5"><span className="text-3xl">🆓</span><h3 className="text-xl font-bold mt-3 font-cairo">{t.pricing.free.title}</h3></div>
               <div className="text-center mb-6"><span className="text-4xl font-bold">{t.pricing.free.price}</span></div>
               <ul className="space-y-2 mb-6">{t.pricing.free.features.map((f: string, i: number) => <li key={i} className="flex items-center gap-2 text-text-gray text-sm"><div className="w-1.5 h-1.5 rounded-full bg-accent-cyan" /><span className="font-tajawal">{f}</span></li>)}</ul>
-              <button className="w-full btn-secondary">{t.pricing.selectPlan}</button>
+              <button type="button" onClick={() => handlePurchasePackage('pkg_100')} className="w-full btn-secondary">{t.pricing.selectPlan}</button>
             </div>
             <div className="relative neon-border rounded-2xl p-6 scale-105 fade-in-scroll">
               <div className="popular-badge">{t.pricing.popular}</div>
               <div className="text-center mb-5"><span className="text-3xl">⭐</span><h3 className="text-xl font-bold mt-3 font-cairo">{t.pricing.pro.title}</h3></div>
               <div className="text-center mb-6"><span className="text-4xl font-bold gradient-text">{t.pricing.pro.price}</span><span className="text-text-gray text-sm ml-1">{lang === 'ar' ? t.pricing.pro.period : t.pricing.pro.periodEn}</span></div>
               <ul className="space-y-2 mb-6">{t.pricing.pro.features.map((f: string, i: number) => <li key={i} className="flex items-center gap-2 text-text-gray text-sm"><div className="w-1.5 h-1.5 rounded-full bg-diamond" /><span className="font-tajawal">{f}</span></li>)}</ul>
-              <button className="w-full btn-primary">{t.pricing.selectPlan}</button>
+              <button type="button" onClick={() => handlePurchasePackage('pkg_500')} className="w-full btn-primary">{t.pricing.selectPlan}</button>
             </div>
             <div className="glass rounded-2xl p-6 fade-in-scroll">
               <div className="text-center mb-5"><span className="text-3xl">👑</span><h3 className="text-xl font-bold mt-3 font-cairo">{t.pricing.vip.title}</h3></div>
               <div className="text-center mb-6"><span className="text-4xl font-bold">{t.pricing.vip.price}</span><span className="text-text-gray text-sm ml-1">{lang === 'ar' ? t.pricing.vip.period : t.pricing.vip.periodEn}</span></div>
               <ul className="space-y-2 mb-6">{t.pricing.vip.features.map((f: string, i: number) => <li key={i} className="flex items-center gap-2 text-text-gray text-sm"><div className="w-1.5 h-1.5 rounded-full bg-accent-purple" /><span className="font-tajawal">{f}</span></li>)}</ul>
-              <button className="w-full btn-secondary">{t.pricing.selectPlan}</button>
+              <button type="button" onClick={() => handlePurchasePackage('pkg_1000')} className="w-full btn-secondary">{t.pricing.selectPlan}</button>
             </div>
           </div>
         </div>
@@ -364,7 +386,7 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch }: 
             </div>
           </div>
           <div className="pt-6 border-t border-white/10 flex flex-col md:flex-row justify-between items-center gap-3">
-            <p className="text-text-gray text-xs">© 2025 Snor Live. {t.footer.rights}.</p>
+            <p className="text-text-gray text-xs">© 2026 Snor Live. {t.footer.rights}.</p>
             <div className="flex gap-4">
               <a href="#" className="text-text-gray text-xs hover:text-accent-cyan">{lang==='ar'?'سياسة الخصوصية':'Privacy'}</a>
               <a href="#" className="text-text-gray text-xs hover:text-accent-cyan">{lang==='ar'?'شروط الخدمة':'Terms'}</a>

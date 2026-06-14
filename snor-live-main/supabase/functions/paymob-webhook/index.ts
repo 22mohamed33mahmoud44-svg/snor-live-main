@@ -12,17 +12,22 @@ async function verifyHmac(data: Record<string, string>, receivedHmac: string): P
     "source_data.pan", "source_data.sub_type", "source_data.type",
     "success",
   ];
+  
+  // دمج القيم بترتيب الأبجدية الخاص بـ Paymob بشكل صارم
   const concatenated = keys.map(k => data[k] ?? "").join("");
   const encoder = new TextEncoder();
   const keyData = encoder.encode(HMAC_SECRET);
   const msgData = encoder.encode(concatenated);
+  
   const cryptoKey = await crypto.subtle.importKey(
     "raw", keyData, { name: "HMAC", hash: "SHA-512" }, false, ["sign"]
   );
+  
   const signature = await crypto.subtle.sign("HMAC", cryptoKey, msgData);
   const computed = Array.from(new Uint8Array(signature))
     .map(b => b.toString(16).padStart(2, "0"))
     .join("");
+    
   return computed.toLowerCase() === receivedHmac.toLowerCase();
 }
 
@@ -36,9 +41,11 @@ serve(async (req) => {
       body = {};
     }
 
-    const url  = new URL(req.url);
+    const url = new URL(req.url);
     const hmac = url.searchParams.get("hmac") ?? "";
-    const obj  = body.obj ?? body ?? {};
+    
+    // سحب الكائن الأساسي للمعاملة سواء كان ملفوفاً داخل obj أو مباشر
+    const obj = body.obj ?? body ?? {};
 
     if (HMAC_SECRET) {
       const flatData: Record<string, string> = {
@@ -55,7 +62,7 @@ serve(async (req) => {
         is_refunded:            String(obj.is_refunded ?? ""),
         is_standalone_payment:  String(obj.is_standalone_payment ?? ""),
         is_voided:              String(obj.is_voided ?? ""),
-        order:                  String(obj.order?.id ?? ""),
+        order:                  String(obj.order?.id ?? obj.order ?? ""),
         owner:                  String(obj.owner ?? ""),
         pending:                String(obj.pending ?? ""),
         "source_data.pan":      String(obj.source_data?.pan ?? ""),
@@ -66,15 +73,17 @@ serve(async (req) => {
 
       const isValid = await verifyHmac(flatData, hmac);
       if (!isValid) {
-        console.warn("Invalid HMAC signature", { hmac, obj });
+        console.warn("⚠️ بصمة التوقيع HMAC غير صالحة، احتمال تلاعب بالبيانات:", { hmac });
         return new Response(JSON.stringify({ received: true, result: "invalid_signature" }), {
-          status: 200,
+          status: 200, // نرجع 200 دائماً عشان Paymob ميفضلش يعيد الإرسال ويعطل السيرفر
           headers: { "Content-Type": "application/json" },
         });
       }
     }
 
-    if (obj.success !== true) {
+    // قبول الـ success سواء بوليان أو نص للتوافق الكامل مع قنوات المحافظ والبطاقات
+    const isSuccess = obj.success === true || String(obj.success).toLowerCase() === "true";
+    if (!isSuccess) {
       return new Response(JSON.stringify({ received: true, result: "not_success" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -94,22 +103,39 @@ serve(async (req) => {
       });
     }
 
+    // حماية ضد المعاملات المكررة (إدراج فريد)
     const { error: dupErr } = await supabase
       .from("paymob_events")
       .insert({ transaction_id: transactionId, status: "success" });
 
-    if (dupErr?.code === "23505") {
+    if (dupErr && (dupErr.code === "23505" || dupErr.message?.includes("duplicate"))) {
+      console.log(` المعاملة رقم ${transactionId} تم تجهيزها مسبقاً.`);
       return new Response(JSON.stringify({ received: true, result: "already_processed" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    const merchantOrderId: string = obj.order?.merchant_order_id ?? "";
-    const sep = merchantOrderId.includes("|") ? "|" : "_";
-    const parts = merchantOrderId.split(sep);
-    const userId    = parts[0];
-    const packageId = sep === "|" ? parts[1] : parts.slice(1, -1).join("_");
+    // ── تفكيك مرن وذكي لـ merchant_order_id لضمان استخراج البيانات ──
+    const merchantOrderId: string = String(obj.order?.merchant_order_id ?? obj.merchant_order_id ?? "");
+    let userId = "";
+    let packageId = "";
+
+    // بندعم الفصل بـ | أو _ أو - لتفادي أي طريقة كتابة في دالة الإنشاء
+    const separators = ["|", "_", "-"];
+    let parts: string[] = [merchantOrderId];
+    
+    for (const sep of separators) {
+      if (merchantOrderId.includes(sep)) {
+        parts = merchantOrderId.split(sep);
+        break;
+      }
+    }
+
+    if (parts.length >= 2) {
+      userId = parts[0];
+      packageId = parts[1];
+    }
 
     const PACKAGES: Record<string, number> = {
       pkg_100:  100,
@@ -119,22 +145,28 @@ serve(async (req) => {
 
     const coinsToAdd = PACKAGES[packageId];
 
-    if (!userId || !coinsToAdd) {
-      console.error("Bad order data", { merchantOrderId, userId, packageId });
+    // خطة بديلة: لو الـ packageId مقروء كـ رقم مباشر من بوابة الدفع
+    const finalCoins = coinsToAdd ?? (Number(packageId) ? Number(packageId) : null);
+
+    if (!userId || !finalCoins) {
+      console.error("❌ بيانات الفاتورة غير صالحة أو لا يمكن تفكيكها:", { merchantOrderId, userId, packageId });
+      // مسح السجل المؤقت عشان يقدر يحاول تاني لو صلحنا البيانات
+      await supabase.from("paymob_events").delete().eq("transaction_id", transactionId);
       return new Response(JSON.stringify({ received: true, result: "bad_order_data" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
 
+    // ── تنفيذ دالة إضافة الكوينز المؤمنة بالسيرفر ──
     const { error: coinsErr } = await supabase.rpc("add_coins", {
       p_user_id: userId,
-      p_amount:  coinsToAdd,
+      p_amount:  finalCoins,
       p_meta: { paymob_transaction_id: transactionId, package_id: packageId },
     });
 
     if (coinsErr) {
-      console.error("add_coins failed", coinsErr);
+      console.error("❌ فشل استدعاء دالة rpc add_coins:", coinsErr);
       await supabase.from("paymob_events").delete().eq("transaction_id", transactionId);
       return new Response(JSON.stringify({ received: true, result: "coins_failed" }), {
         status: 200,
@@ -142,7 +174,7 @@ serve(async (req) => {
       });
     }
 
-    console.log("Payment processed", { transactionId, userId, coinsToAdd });
+    console.log(`✅ تمت عملية الشحن بنجاح! تم إضافة ${finalCoins} كوين للمستخدم ${userId}`);
 
     return new Response(JSON.stringify({ received: true, result: "success" }), {
       status: 200,
@@ -150,7 +182,7 @@ serve(async (req) => {
     });
 
   } catch (err) {
-    console.error("Unhandled error", String(err));
+    console.error("🔥 خطأ غير متوقع في نظام الـ Webhook:", String(err));
     return new Response(JSON.stringify({ received: true, result: "internal_error" }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
