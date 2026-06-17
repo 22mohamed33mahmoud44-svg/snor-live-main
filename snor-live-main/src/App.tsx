@@ -44,17 +44,19 @@ function App() {
   const t   = translations[lang];
   const dir = lang === 'ar' ? 'rtl' : 'ltr';
 
+  useEffect(() => {
+    document.documentElement.lang = lang;
+    document.documentElement.dir  = dir;
+  }, [lang, dir]);
+
   // ── Payment Success ──
+  // ملاحظة: يجب أن يأتي هذا الـ return بعد جميع استدعاءات الـ Hooks
+  // (مثل useState و useEffect) للحفاظ على ثبات ترتيب الـ Hooks بين عمليات الـ render
   if (window.location.pathname === '/payment/success') return (
     <Suspense fallback={<Loading />}>
       <PaymentSuccess />
     </Suspense>
   );
-
-  useEffect(() => {
-    document.documentElement.lang = lang;
-    document.documentElement.dir  = dir;
-  }, [lang, dir]);
 
   const toggleLanguage = () => setLang(l => l === 'ar' ? 'en' : 'ar');
 
