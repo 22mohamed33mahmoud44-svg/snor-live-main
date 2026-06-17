@@ -142,10 +142,8 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   
   // 🚀 الغرفة الحية للمذيع: تم إصلاح الخصائص وتمريرها بالكامل هنا لمنع الأخطاء
   if (activeLiveStream) {
-    const LiveRoomComponent = ActiveLiveRoom as any;
     return (
-      // @ts-ignore
-      <LiveRoomComponent
+      <ActiveLiveRoom
         streamId={activeLiveStream.id}
         title={activeLiveStream.title} 
         filterId={activeLiveStream.filterId} 

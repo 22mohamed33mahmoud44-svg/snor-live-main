@@ -101,12 +101,11 @@ export default function ViewerLiveRoom({
   }, [myUserId, myUsername, streamerId]);
 
   const safeTimeout = useCallback((cb: () => void, ms: number) => {
-    let id: number;
     const cleanCb = () => {
       cb();
       timeoutsRef.current = timeoutsRef.current.filter(tId => tId !== id);
     };
-    id = window.setTimeout(cleanCb, ms);
+    const id = window.setTimeout(cleanCb, ms);
     timeoutsRef.current.push(id);
     return id;
   }, []);
