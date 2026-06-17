@@ -3,8 +3,15 @@
 <head>
   <meta charset="UTF-8" />
 
-  <!-- مهم -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- مهم: viewport-fit=cover لتفعيل المناطق الآمنة (النوتش) على الهواتف -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+  <!-- وسوم خاصة بالجوال (الـ manifest و theme-color يحقنهما vite-plugin-pwa تلقائيًا) -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Snor Live" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
   <!-- عنوان الموقع -->
   <title>Snor Live</title>

@@ -440,7 +440,7 @@ export default function ViewerLiveRoom({
   return createPortal(
     <motion.div
       initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 50 }}
-      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100vh', margin: 0, padding: 0, background: '#05050c', zIndex: 2147483647, display: 'flex', justifyContent: 'center', alignItems: 'center', direction: 'rtl', fontFamily: "'Cairo', sans-serif" }}
+      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100dvh', margin: 0, padding: 0, background: '#05050c', zIndex: 2147483647, display: 'flex', justifyContent: 'center', alignItems: 'center', direction: 'rtl', fontFamily: "'Cairo', sans-serif" }}
     >
       <div style={{ width: '100%', maxWidth: '440px', height: '100%', background: '#000', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 0 60px rgba(0,0,0,0.8)' }}>
 

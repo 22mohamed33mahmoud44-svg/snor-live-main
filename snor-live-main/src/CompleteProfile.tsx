@@ -58,7 +58,7 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
   };
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#0a0a1a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+    <div style={{ minHeight: '100dvh', backgroundColor: '#0a0a1a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
       <div style={{ backgroundColor: '#111827', borderRadius: '20px', padding: '40px', width: '100%', maxWidth: '500px' }}>
         <h2 style={{ color: 'white', fontSize: '28px', fontWeight: 'bold', textAlign: 'center', marginBottom: '8px' }}>
           أكمل بروفايلك 👤

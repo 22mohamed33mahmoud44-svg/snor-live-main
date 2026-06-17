@@ -85,7 +85,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
   const pkg = PACKAGES.find(p => p.id === selectedPkg);
 
   return (
-    <div style={{ minHeight: "100vh", background: "#05050c", color: "#fff", padding: "32px 16px 120px", fontFamily: "'Cairo', sans-serif", direction: "rtl", position: "relative" }}>
+    <div style={{ minHeight: "100dvh", background: "#05050c", color: "#fff", padding: "32px 16px 120px", fontFamily: "'Cairo', sans-serif", direction: "rtl", position: "relative" }}>
       <style>{STYLES}</style>
 
       {onClose && (

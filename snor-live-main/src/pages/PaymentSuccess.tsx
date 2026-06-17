@@ -5,7 +5,7 @@ export default function PaymentSuccess() {
       flexDirection: "column",
       alignItems: "center",
       justifyContent: "center",
-      height: "100vh",
+      height: "100dvh",
       background: "#0f0f0f",
       color: "white",
       fontFamily: "sans-serif"

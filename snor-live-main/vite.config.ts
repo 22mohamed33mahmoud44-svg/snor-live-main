@@ -10,10 +10,15 @@ export default defineConfig({
       manifest: {
         name: 'Snor Live',
         short_name: 'Snor',
+        description: 'شات فيديو مباشر مع ناس من كل العالم. ابدأ مجانًا الآن!',
+        lang: 'ar',
+        dir: 'rtl',
         start_url: '/',
+        scope: '/',
         display: 'standalone',
-        background_color: '#080810',
-        theme_color: '#7C6AFF',
+        orientation: 'portrait',
+        background_color: '#05050c',
+        theme_color: '#05050c',
         icons: [
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
