@@ -87,6 +87,7 @@ export default function ViewerLiveRoom({
   const [toast, setToast] = useState<string | null>(null);
 
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [reconnectKey, setReconnectKey] = useState(0);
 
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -94,7 +95,6 @@ export default function ViewerLiveRoom({
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const timeoutsRef = useRef<number[]>([]);
 
-  // استخدام Ref لحفظ القيم الحالية لمنع إعادة تشغيل تأثير الـ useEffect
   const identityRef = useRef({ myUserId, myUsername, streamerId });
   useEffect(() => {
     identityRef.current = { myUserId, myUsername, streamerId };
@@ -180,7 +180,19 @@ export default function ViewerLiveRoom({
     safeTimeout(() => setSparkleBurstKey(0), 1600);
   }, [safeTimeout]);
 
-  // الـ useEffect الرئيسي: تم تنظيف الاعتمادات لضمان استقرار الاتصال وعدم التكرار
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log("المستخدم عاد للغرفة، جاري إنعاش قنوات الـ Realtime والـ WebRTC...");
+        setReconnectKey(prev => prev + 1);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     const currentMyUserId = identityRef.current.myUserId;
@@ -315,7 +327,7 @@ export default function ViewerLiveRoom({
       timeoutsRef.current.forEach(id => window.clearTimeout(id));
       timeoutsRef.current = [];
     };
-  }, [streamId, safeTimeout, showToast, initPeerConnection, spawnHeart, showGiftToast, triggerSparkleBurst]);
+  }, [streamId, safeTimeout, showToast, initPeerConnection, spawnHeart, showGiftToast, triggerSparkleBurst, reconnectKey]);
 
   useEffect(() => {
     let isMounted = true;
@@ -403,32 +415,86 @@ export default function ViewerLiveRoom({
     setFollowLoading(false);
   };
 
+  // 🌟 دالة إرسال الهدايا الجديدة والمحمية بالسيرفر بالكامل 🌟
   const sendGift = async (gift: GiftDef) => {
-    if (gemsBalance === null) { showToast('جاري تحميل رصيدك...'); return; }
-    if (gemsBalance < gift.cost) { showToast('رصيدك من الجواهر غير كافٍ'); setShowGiftPanel(false); return; }
-    if (!streamerId) { showToast('تعذر إرسال الهدية'); return; }
-    setShowGiftPanel(false);
-    const { data, error } = await supabase.rpc('send_gift_safe', {
-      p_stream_id:   streamId,
-      p_receiver_id: streamerId,
-      p_gift_type:   gift.id,
-      p_coin_cost:   gift.cost,
-    });
-    if (error) { showToast(error.message || 'تعذر إرسال الهدية'); return; }
-    if (!data?.success) {
-      const msgs: Record<string, string> = {
-        'insufficient_coins': 'رصيدك غير كافٍ',
-        'stream_not_live':    'البث غير نشط',
-        'cannot_gift_self':   'لا يمكنك إرسال هدية لنفسك',
-      };
-      showToast(msgs[data?.error] || 'تعذر إرسال الهدية');
-      return;
+    if (gemsBalance === null) { 
+      showToast('جاري تحميل رصيدك...'); 
+      return; 
     }
-    setGemsBalance(prev => (prev !== null ? prev - gift.cost : prev));
-    showGiftToast('أنت', gift.emoji, gift.name);
-    spawnHeart(undefined, gift.emoji);
-    roomChannelRef.current?.send({ type: 'broadcast', event: 'gift', payload: { senderName: myUsername || 'متابع', emoji: gift.emoji, giftName: gift.name } });
-    roomChannelRef.current?.send({ type: 'broadcast', event: 'gift_sent', payload: { senderName: myUsername || 'متابع', emoji: gift.emoji, giftName: gift.name, cost: gift.cost } });
+    if (gemsBalance < gift.cost) { 
+      showToast('رصيدك من الجواهر غير كافٍ'); 
+      setShowGiftPanel(false); 
+      return; 
+    }
+    if (!streamerId) { 
+      showToast('تعذر تحديد حساب المذيع'); 
+      return; 
+    }
+
+    setShowGiftPanel(false);
+
+    try {
+      const { data, error } = await supabase.rpc('send_gift_safe', {
+        p_stream_id:   streamId,
+        p_receiver_id: streamerId,
+        p_gift_type:   gift.id,
+        p_coin_cost:   gift.cost,
+      });
+
+      if (error) { 
+        console.error('RPC Error:', error.message);
+        showToast('حدث خطأ في الاتصال بالسيرفر'); 
+        return; 
+      }
+
+      if (data && data.success) {
+        setGemsBalance(prev => (prev !== null ? prev - gift.cost : prev));
+        showGiftToast('أنت', gift.emoji, gift.name);
+        spawnHeart(undefined, gift.emoji);
+
+        roomChannelRef.current?.send({ 
+          type: 'broadcast', 
+          event: 'gift', 
+          payload: { 
+            senderName: myUsername || 'متابع', 
+            emoji: gift.emoji, 
+            giftName: gift.name 
+          } 
+        });
+
+        roomChannelRef.current?.send({ 
+          type: 'broadcast', 
+          event: 'gift_sent', 
+          payload: { 
+            senderName: myUsername || 'متابع', 
+            emoji: gift.emoji, 
+            giftName: gift.name, 
+            cost: gift.cost 
+          } 
+        });
+
+      } else {
+        switch (data?.error) {
+          case 'insufficient_coins':
+            showToast('رصيدك من الجواهر غير كافٍ لهذه الهدية');
+            break;
+          case 'cannot_gift_self':
+            showToast('لا يمكنك إرسال هدية لنفسك!');
+            break;
+          case 'stream_not_live':
+            showToast('البث الحالي لم يعد نشطاً');
+            break;
+          case 'unauthenticated':
+            showToast('يرجى تسجيل الدخول أولاً');
+            break;
+          default:
+            showToast('تعذر إرسال الهدية، يرجى المحاولة لاحقاً');
+        }
+      }
+    } catch (err) {
+      console.error('Catch Error during sendGift:', err);
+      showToast('حدث خطأ غير متوقع');
+    }
   };
 
   const sendSparkle = (e: React.MouseEvent) => {
@@ -445,7 +511,7 @@ export default function ViewerLiveRoom({
       <div style={{ width: '100%', maxWidth: '440px', height: '100%', background: '#000', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 0 60px rgba(0,0,0,0.8)' }}>
 
         <div onClick={handleScreenTap} style={{ position: 'absolute', inset: 0, zIndex: 1, cursor: 'pointer', background: '#000' }}>
-          <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: remoteStream ? 'block' : 'none' }} />
+          <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover', display: remoteStream ? 'block' : 'none' }} />
           {!remoteStream && (
             <div style={{ width: '100%', height: '100%', background: 'linear-gradient(to bottom, #110e26, #03030a)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
               <motion.div animate={{ scale: [1, 1.1, 1], opacity: [0.5, 1, 0.5] }} transition={{ repeat: Infinity, duration: 2 }}
@@ -495,8 +561,8 @@ export default function ViewerLiveRoom({
 
         <div style={{ position: 'relative', zIndex: 10, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '16px', boxSizing: 'border-box', pointerEvents: 'none' }}>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'env(safe-area-inset-top)', pointerEvents: 'auto' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.45)', padding: '4px 14px 4px 4px', borderRadius: '50px', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'env(safe-area-inset-top)', pointerEvents: 'auto' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.45)', padding: '4px 14px 4px 4px', borderRadius: '50px', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)' }}>
               <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'linear-gradient(135deg, #00d4ff, #7c3aed)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', fontWeight: 900, color: '#fff' }}>{streamerName?.[0]?.toUpperCase() ?? '🎙️'}</div>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#fff', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{streamerName}</span>
@@ -509,7 +575,7 @@ export default function ViewerLiveRoom({
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <div style={{ background: 'rgba(0,0,0,0.45)', color: '#fff', padding: '6px 14px', borderRadius: '50px', fontSize: '0.75rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 6, backdropFilter: 'blur(20px)' }}>
                 <Users size={12} style={{ color: '#00d4ff' }} /> {viewersCount}
               </div>
@@ -555,7 +621,7 @@ export default function ViewerLiveRoom({
           {showGiftPanel && (
             <>
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowGiftPanel(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 40 }} />
-              <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 41, background: '#0f0e1c', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '18px 16px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 18px)', border: '1px solid rgba(255,255,255,0.08)', borderBottom: 'none' }}>
+              <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 41, background: '#0f0e1c', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '18px 16px', paddingBottom: 'calc(env(safe-area-inset-top) + 18px)', border: '1px solid rgba(255,255,255,0.08)', borderBottom: 'none' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                   <span style={{ color: '#fff', fontWeight: 900, fontSize: '0.95rem' }}>الهدايا</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 20, padding: '4px 12px' }}>

@@ -60,10 +60,15 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
       const XPayStationWidget = (window as any).XPayStationWidget;
 
       if (XPayStationWidget) {
-        // ✅ افتح الـ widget كـ popup فوق الصفحة
+        // ✅ تعديل: أضفنا إعدادات الـ lightbox لإجبارها على أخذ كامل مساحة الشاشة بشكل متجاوب
         XPayStationWidget.init({
           access_token: data.token,
           sandbox: true,
+          lightbox: {
+            width: "100%",
+            height: "100%",
+            zIndex: 999999,
+          },
         });
         setStep("select");
         XPayStationWidget.open();
@@ -163,4 +168,16 @@ const STYLES = `
   .bc-loading-overlay span { font-size: 0.95rem; color: rgba(255,255,255,0.7); font-weight: 600; margin-top: 16px; }
   .bc-spinner { width: 36px; height: 36px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #6366f1; border-radius: 50%; animation: bc-spin 0.8s linear infinite; }
   .bc-err-retry-btn { margin-top: 24px; padding: 10px 24px; border: none; border-radius: 12px; background: rgba(255,255,255,0.08); color: #fff; font-weight: 600; cursor: pointer; font-family: 'Cairo', sans-serif; }
+
+  /* 🛠️ تعديل إضافي: إجبار الـ Iframe والـ Elements المحقونة من إكسولا على أخذ كامل مساحة الشاشة وإلغاء أي قص */
+  div[class*="xsolla"], iframe[id*="xsolla"], #xsolla-paystation-widget {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 999999 !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+  }
 `;
