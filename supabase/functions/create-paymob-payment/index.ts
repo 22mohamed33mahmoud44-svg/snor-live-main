@@ -70,7 +70,7 @@ serve(async (req: Request) => {
           email: user.email ?? "user@example.com",
           first_name: firstName,
           last_name: lastName,
-          phone_number: phone ?? "01000000000",
+          phone_number: (phone && phone.trim()) ? phone.trim() : "01000000000",
           apartment: "N/A", floor: "N/A", street: "N/A",
           building: "N/A", shipping_method: "N/A",
           postal_code: "N/A", city: "Cairo", country: "EG", state: "Cairo",
