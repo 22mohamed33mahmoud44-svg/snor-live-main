@@ -7,8 +7,6 @@ import {
 
 interface LiveStreamStudioProps {
   onClose: () => void;
-  // ملاحظة: تم تمرير الـ stream نفسه عشان نتجنب طلب getUserMedia مرة ثانية
-  // في صفحة البث الفعلية (كان ده سبب محتمل لأعطال WebRTC على بعض الأجهزة)
   onStart: (title: string, filterId: string, intensity: number, stream: MediaStream | null) => void;
 }
 
@@ -34,20 +32,15 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
   const [filterIntensity, setFilterIntensity] = useState(65);
   const [isMobile, setIsMobile] = useState(false);
 
-  // حالة الكاميرا الحقيقية (بدون أي محاكاة عشوائية)
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>('idle');
   const [cameraError, setCameraError] = useState<string>('');
   const [videoInfo, setVideoInfo] = useState<{ width: number; height: number; frameRate: number } | null>(null);
 
-  // حفظ شدة كل فلتر بشكل مستقل، عشان لو المستخدم رجع لفلتر سابق ما يخسر تعديله
   const intensityMapRef = useRef<Record<string, number>>({});
-
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  // عشان نعرف لو الـ stream تم تسليمه للصفحة التالية فما نوقفش الـ tracks عند الإغلاق
   const handedOffRef = useRef(false);
 
-  // الكشف الديناميكي الفوري لحجم الشاشة لعزل بيئة الموبايل تماماً عن الديسكتوب
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
     handleResize();
@@ -55,14 +48,25 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // تشغيل الكاميرا والمايك بدقة عالية + معالجة كاملة للأخطاء (رفض الإذن، عدم وجود كاميرا...)
+  // تشغيل الكاميرا بدقة رأسية متوافقة 100% مع أجهزة الموبايل والبث الجوال
   const initCamera = useCallback(async () => {
     setCameraStatus('loading');
     setCameraError('');
 
+    // إيقاف أي Track قديم شغال قبل إعادة التهيئة لمنع قفل الهاردوير للعدسة
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: { 
+          facingMode: 'user', 
+          // التعديل: طلب أبعاد رأسية حقيقية (1080x1920) بدلاً من الأبعاد العريضة لمنع تشويه الوجه
+          width: { ideal: 1080 }, 
+          height: { ideal: 1920 },
+          aspectRatio: { ideal: 0.5625 } // أبعاد 9:16 الدقيقة
+        },
         audio: true,
       });
 
@@ -79,7 +83,6 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
         });
       }
 
-      // إعادة مزامنة حالة المايك/الكاميرا مع حالة الـ tracks الفعلية
       stream.getAudioTracks().forEach(t => (t.enabled = !isMicMuted));
       stream.getVideoTracks().forEach(t => (t.enabled = !isCamOff));
 
@@ -102,13 +105,11 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
     initCamera();
 
     return () => {
-      // ما نوقفش الـ stream لو هو متسلّم لصفحة البث التالية
       if (!handedOffRef.current && streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initCamera]);
 
   const toggleMic = () => {
     if (!streamRef.current) return;
@@ -125,9 +126,7 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
   };
 
   const handleFilterChange = (id: string) => {
-    // خزّن شدة الفلتر الحالي قبل التبديل
     intensityMapRef.current[selectedFilter] = filterIntensity;
-
     setSelectedFilter(id);
     const target = filtersList.find(f => f.id === id);
     const savedIntensity = intensityMapRef.current[id];
@@ -149,7 +148,6 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
     onClose();
   };
 
-  // مصفوفة الـ 12 فلتر تجميلي سينمائي المتكاملة مع السلايدر اليدوي
   const filtersList: FilterType[] = [
     { id: 'natural', name: 'طبيعي Real', icon: '✨', getEffect: () => 'none', unit: '%', defaultVal: 0, min: 0, max: 0 },
     { id: 'beauty', name: 'نعومة الـ 4K', icon: '🧼', getEffect: (v) => `blur(${v * 0.012}px) brightness(${1 + v * 0.0006})`, unit: '%', defaultVal: 65, min: 0, max: 100 },
@@ -168,11 +166,8 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
   const activeFilterObj = filtersList.find(f => f.id === selectedFilter) || filtersList[0];
   const computedFilterStyle = activeFilterObj.getEffect(filterIntensity);
 
-  // ==========================================
-  // ⚠️ شاشة الخطأ المشتركة (تظهر فوق كل الواجهات لو الكاميرا فشلت)
-  // ==========================================
   const CameraErrorOverlay = () => (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6">
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/90 backdrop-blur-sm p-6 rounded-2xl">
       <div className="max-w-sm w-full bg-[#11111f] border border-white/10 rounded-2xl p-6 space-y-4 text-center">
         <div className="w-12 h-12 mx-auto rounded-full bg-red-500/10 flex items-center justify-center">
           <AlertTriangle className="w-6 h-6 text-red-400" />
@@ -195,13 +190,11 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
   );
 
   // ==========================================
-  // 📱 1. واجهة الموبايل الثورية (كادر صافي 100% بدون حجب للوجه)
+  // 📱 1. واجهة الموبايل الثورية (كادر صافي 100% غامق بالكامل)
   // ==========================================
   if (isMobile) {
     return (
       <div className="fixed inset-0 bg-black text-white z-[9999] flex flex-col justify-between overflow-hidden select-none font-['Cairo']" dir="rtl">
-
-        {/* شاشة الفيديو تحتل الـ Viewport بالكامل خلف الأزرار */}
         <div className="absolute inset-0 z-0">
           <video
             ref={videoRef}
@@ -211,21 +204,19 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
             className="w-full h-full object-cover scale-x-[-1] transition-all duration-300"
             style={{ filter: computedFilterStyle }}
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/60 pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/70 pointer-events-none" />
           {cameraStatus === 'loading' && (
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
               <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
             </div>
           )}
           {cameraStatus === 'error' && <CameraErrorOverlay />}
         </div>
 
-        {/* الحافة العلوية */}
         <header className="relative z-10 flex justify-between items-center p-4 mt-[env(safe-area-inset-top)]">
           <motion.button
             whileTap={{ scale: 0.9 }}
             onClick={handleClose}
-            aria-label="إغلاق الاستوديو"
             className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center text-white/90"
           >
             <X className="w-5 h-5" />
@@ -237,10 +228,7 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
           </div>
         </header>
 
-        {/* عناصر التحكم العائمة السفلية لحماية تجربة المذيع وحرية حركته */}
         <footer className="relative z-10 p-4 space-y-4 mb-[env(safe-area-inset-bottom)]">
-
-          {/* حقل الإدخال النصي الشفاف */}
           <div className="relative">
             <Type className="absolute right-4 top-3.5 w-4 h-4 text-white/40" />
             <input
@@ -249,19 +237,16 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
               onChange={e => setStreamTitle(e.target.value)}
               placeholder="اكتب عنواناً للبث يلفت الأنظار... 🔥"
               maxLength={80}
-              className="w-full bg-black/50 backdrop-blur-xl border border-white/10 rounded-2xl py-3 pr-10 pl-4 text-sm text-white placeholder-white/40 outline-none focus:border-rose-500/50 transition-colors text-center font-medium"
+              className="w-full bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl py-3 pr-10 pl-4 text-sm text-white placeholder-white/40 outline-none focus:border-rose-500/50 transition-colors text-center font-medium"
             />
           </div>
 
-          {/* صف أزرار الحواف الدائرية ميكرو */}
           <div className="flex justify-between items-center">
             <div className="flex gap-2">
               <motion.button
                 whileTap={{ scale: 0.9 }}
                 onClick={toggleMic}
                 disabled={cameraStatus !== 'ready'}
-                aria-label={isMicMuted ? 'تشغيل الميكروفون' : 'كتم الميكروفون'}
-                aria-pressed={isMicMuted}
                 className={`w-11 h-11 rounded-full flex items-center justify-center border transition-all disabled:opacity-40 ${isMicMuted ? 'bg-red-500/80 border-red-500' : 'bg-black/40 border-white/10 backdrop-blur-md'}`}
               >
                 {isMicMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
@@ -271,19 +256,15 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
                 whileTap={{ scale: 0.9 }}
                 onClick={toggleCamera}
                 disabled={cameraStatus !== 'ready'}
-                aria-label={isCamOff ? 'تشغيل الكاميرا' : 'إيقاف الكاميرا'}
-                aria-pressed={isCamOff}
                 className={`w-11 h-11 rounded-full flex items-center justify-center border transition-all disabled:opacity-40 ${isCamOff ? 'bg-red-500/80 border-red-500' : 'bg-black/40 border-white/10 backdrop-blur-md'}`}
               >
                 {isCamOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
               </motion.button>
             </div>
 
-            {/* الأيقونة السحرية الواحدة للفلاتر */}
             <motion.button
               whileTap={{ scale: 0.9 }}
               onClick={() => setOpenFiltersPanel(true)}
-              aria-label="فتح لوحة الفلاتر"
               className="w-12 h-12 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center border-2 border-white shadow-lg shadow-purple-500/30"
             >
               <Wand2 className="w-5 h-5 text-white" />
@@ -294,13 +275,12 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
             whileTap={{ scale: 0.98 }}
             onClick={handleStart}
             disabled={cameraStatus !== 'ready'}
-            className="w-full py-3.5 bg-gradient-to-r from-rose-500 to-pink-500 rounded-2xl font-black text-sm tracking-wide shadow-lg shadow-rose-500/20 active:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full py-3.5 bg-gradient-to-r from-rose-500 to-pink-500 rounded-2xl font-black text-sm tracking-wide shadow-lg shadow-rose-500/20 disabled:opacity-40"
           >
             بدء البث المباشر الآن 🚀
           </motion.button>
         </footer>
 
-        {/* درج الفلاتر السفلي للموبايل (Spring Motion Bottom Sheet) */}
         <AnimatePresence>
           {openFiltersPanel && (
             <motion.div
@@ -317,7 +297,6 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
                   min="0" max="100"
                   value={filterIntensity}
                   onChange={e => handleIntensityChange(Number(e.target.value))}
-                  aria-label={`شدة فلتر ${activeFilterObj.name}`}
                   disabled={activeFilterObj.max === 0}
                   className="flex-1 mx-4 accent-purple-500 h-1 bg-white/10 rounded-full appearance-none disabled:opacity-30"
                 />
@@ -329,8 +308,6 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
                   <button
                     key={f.id}
                     onClick={() => handleFilterChange(f.id)}
-                    aria-label={`فلتر ${f.name}`}
-                    aria-pressed={selectedFilter === f.id}
                     className={`flex-shrink-0 flex flex-col items-center gap-2 snap-center transition-all ${selectedFilter === f.id ? 'text-purple-400' : 'text-white/40'}`}
                   >
                     <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-lg font-bold border transition-all ${selectedFilter === f.id ? 'bg-purple-500/20 border-purple-500 shadow-md shadow-purple-500/10' : 'bg-white/5 border-white/5'}`}>
@@ -348,19 +325,18 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
   }
 
   // ==========================================
-  // 🖥️ 2. واجهة الديسكتوب والكمبيوتر الاحترافية (ملء الأطراف السوداء كاملة)
+  // 🖥️ 2. واجهة الديسكتوب والكمبيوتر الاحترافية (محاكاة كادر الموبايل 9:16 بالمنتصف)
   // ==========================================
   return (
     <div className="fixed inset-0 bg-[#07070c] text-white z-[9999] flex overflow-hidden font-['Cairo'] select-none" dir="rtl">
 
-      {/* اللوحة الجانبية اليمنى: الـ 12 فلتر (استغلال المساحات السوداء القديمة) */}
+      {/* الجانب الأيمن: الفلاتر */}
       <aside className="w-80 bg-[#0b0b13] border-l border-white/[0.04] flex flex-col p-5 space-y-6 flex-shrink-0">
         <div className="flex items-center gap-2 pb-4 border-b border-white/[0.05]">
           <Wand2 className="w-5 h-5 text-indigo-400" />
           <h2 className="text-sm font-black tracking-wide">مركز تجميل الفلاتر الذكي</h2>
         </div>
 
-        {/* تحكم يدوي منزلق بالقوة والـ Intensity */}
         <div className="bg-[#11111f] p-4 rounded-2xl border border-white/[0.02] space-y-3">
           <div className="flex justify-between text-xs font-bold text-indigo-400">
             <span>قوة تأثير {activeFilterObj.name}</span>
@@ -371,13 +347,11 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
             min="0" max="100"
             value={filterIntensity}
             onChange={e => handleIntensityChange(Number(e.target.value))}
-            aria-label={`شدة فلتر ${activeFilterObj.name}`}
             disabled={activeFilterObj.max === 0}
-            className="w-full accent-indigo-500 bg-white/5 rounded-full h-1 appearance-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            className="w-full accent-indigo-500 bg-white/5 rounded-full h-1 appearance-none cursor-pointer disabled:opacity-30"
           />
         </div>
 
-        {/* شبكة الفلاتر الـ 12 كاملة وموزعة في المساحة الجانبية */}
         <div className="flex-1 overflow-y-auto grid grid-cols-2 gap-3 pr-1 scrollbar-none">
           {filtersList.map(f => {
             const isSelected = selectedFilter === f.id;
@@ -387,8 +361,6 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
                 whileTap={{ scale: 0.98 }}
                 key={f.id}
                 onClick={() => handleFilterChange(f.id)}
-                aria-label={`فلتر ${f.name}`}
-                aria-pressed={isSelected}
                 className={`p-4 rounded-2xl border flex flex-col items-center justify-center gap-2 transition-all ${isSelected ? 'bg-indigo-500/10 border-indigo-500 text-indigo-400' : 'bg-[#11111f] border-transparent text-white/60 hover:text-white'}`}
               >
                 <span className="text-2xl">{f.icon}</span>
@@ -399,76 +371,72 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
         </div>
       </aside>
 
-      {/* المنتصف: كاميرا سينمائية عريضة 16:9 تأخذ كامل المسافة بدون حواف ميتة */}
-      <main className="flex-1 relative bg-black flex items-center justify-center">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="w-full h-full object-cover scale-x-[-1] transition-all duration-300"
-          style={{ filter: computedFilterStyle }}
-        />
+      {/* المنتصف: التعديل الجوهري - عزل الفيديو بداخل حاوية طولية محاكية للموبايل 9:16 بارتفاع كامل */}
+      <main className="flex-1 relative bg-[#020205] flex items-center justify-center p-4">
+        <div className="relative aspect-[9/16] h-full max-h-[92vh] rounded-3xl overflow-hidden bg-black shadow-2xl border border-white/5">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full h-full object-cover scale-x-[-1] transition-all duration-300"
+            style={{ filter: computedFilterStyle }}
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/60 pointer-events-none" />
 
-        {cameraStatus === 'loading' && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-10 h-10 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+          {cameraStatus === 'loading' && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+              <div className="w-10 h-10 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+            </div>
+          )}
+          {cameraStatus === 'error' && <CameraErrorOverlay />}
+
+          {/* هيدر معلومات الإشارة عائم فوق شاشة الكاميرا المصغرة */}
+          <div className="absolute top-4 inset-x-4 flex justify-between items-center pointer-events-none">
+            <div className="bg-black/60 backdrop-blur-md border border-white/10 px-3 py-1.5 rounded-full flex items-center gap-2 pointer-events-auto">
+              <Activity className={`w-3.5 h-3.5 ${cameraStatus === 'ready' ? 'text-emerald-400 animate-pulse' : 'text-white/30'}`} />
+              <span className="text-[11px] font-medium text-white/80">
+                {cameraStatus === 'ready' && videoInfo
+                  ? <><span className="text-emerald-400 font-mono font-bold">{videoInfo.width}×{videoInfo.height}</span></>
+                  : 'غير متاح'}
+              </span>
+            </div>
+
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={handleClose}
+              className="w-8 h-8 rounded-full bg-black/60 backdrop-blur-md border border-white/10 flex items-center justify-center pointer-events-auto text-white/70 hover:text-white transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </motion.button>
           </div>
-        )}
-        {cameraStatus === 'error' && <CameraErrorOverlay />}
 
-        {/* هيدر معلومات الإشارة العائمة فوق الفيديو (بيانات حقيقية من الـ MediaStream) */}
-        <div className="absolute top-5 inset-x-5 flex justify-between items-center pointer-events-none">
-          <div className="bg-black/50 backdrop-blur-xl border border-white/10 px-4 py-2 rounded-full flex items-center gap-3 pointer-events-auto">
-            <Activity className={`w-4 h-4 ${cameraStatus === 'ready' ? 'text-emerald-400 animate-pulse' : 'text-white/30'}`} />
-            <span className="text-xs font-medium text-white/80">
-              {cameraStatus === 'ready' && videoInfo
-                ? <>جودة البث: <span className="text-emerald-400 font-mono font-bold">{videoInfo.width}×{videoInfo.height} • {videoInfo.frameRate || '--'} FPS</span></>
-                : cameraStatus === 'loading'
-                  ? 'جاري تشغيل الكاميرا...'
-                  : 'الكاميرا غير متاحة'}
-            </span>
+          {/* أزرار العتاد السفلية بداخل كادر الكاميرا */}
+          <div className="absolute bottom-4 right-4 flex gap-2">
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={toggleMic}
+              disabled={cameraStatus !== 'ready'}
+              className={`w-10 h-10 rounded-full flex items-center justify-center border text-white shadow-xl transition-all disabled:opacity-40 ${isMicMuted ? 'bg-red-500 border-red-600' : 'bg-black/60 border-white/10 backdrop-blur-md'}`}
+            >
+              {isMicMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </motion.button>
+
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={toggleCamera}
+              disabled={cameraStatus !== 'ready'}
+              className={`w-10 h-10 rounded-full flex items-center justify-center border text-white shadow-xl transition-all disabled:opacity-40 ${isCamOff ? 'bg-red-500 border-red-600' : 'bg-black/60 border-white/10 backdrop-blur-md'}`}
+            >
+              {isCamOff ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
+            </motion.button>
           </div>
-
-          <motion.button
-            whileTap={{ scale: 0.9 }}
-            onClick={handleClose}
-            aria-label="إغلاق الاستوديو"
-            className="w-9 h-9 rounded-full bg-black/50 backdrop-blur-xl border border-white/10 flex items-center justify-center pointer-events-auto text-white/70 hover:text-white transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </motion.button>
-        </div>
-
-        {/* أزرار عتاد الكاميرا والميكروفون السفلية العائمة الصافية للديسكتوب */}
-        <div className="absolute bottom-6 right-6 flex gap-3">
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={toggleMic}
-            disabled={cameraStatus !== 'ready'}
-            aria-label={isMicMuted ? 'تشغيل الميكروفون' : 'كتم الميكروفون'}
-            aria-pressed={isMicMuted}
-            className={`w-12 h-12 rounded-full flex items-center justify-center border text-white shadow-xl transition-all disabled:opacity-40 ${isMicMuted ? 'bg-red-500 border-red-600' : 'bg-black/60 border-white/10 backdrop-blur-xl'}`}
-          >
-            {isMicMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={toggleCamera}
-            disabled={cameraStatus !== 'ready'}
-            aria-label={isCamOff ? 'تشغيل الكاميرا' : 'إيقاف الكاميرا'}
-            aria-pressed={isCamOff}
-            className={`w-12 h-12 rounded-full flex items-center justify-center border text-white shadow-xl transition-all disabled:opacity-40 ${isCamOff ? 'bg-red-500 border-red-600' : 'bg-black/60 border-white/10 backdrop-blur-xl'}`}
-          >
-            {isCamOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-          </motion.button>
         </div>
       </main>
 
-      {/* اللوحة الجانبية اليسرى: حقل إعداد الغرفة وزر الإطلاق لتغطية الجانب الأيسر الميت بالكامل */}
+      {/* الجانب الأيسر: إعداد ونشر الغرفة */}
       <aside className="w-72 bg-[#0b0b13] border-r border-white/[0.04] flex flex-col p-6 justify-between flex-shrink-0">
         <div className="space-y-5">
           <div className="flex items-center gap-2 pb-4 border-b border-white/[0.05]">
@@ -489,13 +457,12 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
           </div>
         </div>
 
-        {/* زر الإنطلاق النيوني الفخم */}
         <motion.button
           whileHover={{ scale: 1.02, y: -2 }}
           whileTap={{ scale: 0.98 }}
           onClick={handleStart}
           disabled={cameraStatus !== 'ready'}
-          className="w-full py-4 bg-gradient-to-r from-rose-500 via-pink-500 to-purple-600 rounded-2xl font-black text-sm tracking-wide shadow-lg shadow-rose-500/20 hover:shadow-rose-500/30 transition-all text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
+          className="w-full py-4 bg-gradient-to-r from-rose-500 via-pink-500 to-purple-600 rounded-2xl font-black text-sm tracking-wide shadow-lg shadow-rose-500/20 hover:shadow-rose-500/30 transition-all text-white disabled:opacity-40"
         >
           نشر وإطلاق البث الآن 🚀
         </motion.button>

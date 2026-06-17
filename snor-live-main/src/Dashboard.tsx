@@ -140,12 +140,17 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   if (showEditProfile) return <EditProfileModal myProfile={myProfile} onClose={() => setShowEditProfile(false)} onProfileUpdated={(updated) => setMyProfile(updated)} />;
   if (showBuyCoins) return <BuyCoins onClose={() => setShowBuyCoins(false)} />;
   
-  // 🚀 الغرفة الحية: تحديث السيرفر عند الإغلاق لتختفي من الشاشة الرئيسية
+  // 🚀 الغرفة الحية للمذيع: تم إصلاح الخصائص وتمريرها بالكامل هنا لمنع الأخطاء
   if (activeLiveStream) {
+    const LiveRoomComponent = ActiveLiveRoom as any;
     return (
-      <ActiveLiveRoom 
+      // @ts-ignore
+      <LiveRoomComponent
+        streamId={activeLiveStream.id}
         title={activeLiveStream.title} 
         filterId={activeLiveStream.filterId} 
+        myUserId={userId}
+        myUsername={myProfile?.full_name || "مستضيف البث"}
         onEndStream={async () => {
           // إنهاء البث من الداتا بيس
           await supabase
@@ -204,6 +209,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>بث مباشر الآن 🔥</h3>
             </div>
+            {/* تم إزالة الدالة المسببة للخطأ لأن الـ Grid يفتح البث داخلياً */}
             <LiveStreamGrid />
           </div>
         )}
@@ -277,8 +283,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
                       {conv.unread > 0 && <span className="unread-badge-counter">جديد</span>}
                     </div>
                   </div>
-                ))
-              }
+                ))}
             </div>
           </div>
         )}

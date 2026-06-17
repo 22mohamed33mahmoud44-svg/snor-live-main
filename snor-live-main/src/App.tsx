@@ -28,6 +28,9 @@ function App() {
   const [showRandomMatch, setShowRandomMatch] = useState(false);
   const [currentMatch,    setCurrentMatch]    = useState<any>(null);
 
+  // ⚠️ تم إزالة الـ State التجريبية القديمة لـ activeLiveStream من هنا 
+  // لأن البثوث والمشاهدة أصبحت تُدار بشكل ديناميكي ممتاز وبدون أخطاء داخل الـ Dashboard والـ Grid
+
   const {
     user,
     profileChecked,
@@ -77,6 +80,7 @@ function App() {
 
   // ── 4) Logged-in screens ──
   if (user && profileChecked && !showOnboarding) {
+
     if (currentMatch) return (
       <Suspense fallback={<Loading />}>
         <VideoCall
@@ -99,11 +103,11 @@ function App() {
       </Suspense>
     );
 
+    // الـ Dashboard هنا تم تنظيفها وتتوافق 100% مع الـ Props الحالية للنوع DashboardProps
     return (
       <Suspense fallback={<Loading />}>
         <Dashboard
           userId={user.id}
-          onStartRandomMatch={() => setShowRandomMatch(true)}
           onLogout={logout}
         />
       </Suspense>
