@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from './supabase';
+import { STUN_SERVERS as ICE_SERVERS } from './constants/iceServers';
 
 type Props = {
   userId: string;
@@ -15,20 +16,6 @@ const SFX_END = 'https://assets.mixkit.co/active_storage/sfx/2564/2564-84.wav';
 
 const fmt = (s: number) =>
   `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  {
-    urls: [
-      'turn:global.relay.metered.ca:80',
-      'turn:global.relay.metered.ca:443',
-      'turns:global.relay.metered.ca:443',
-    ],
-    username: '33c573ac1dd5ec4a29556327',
-    credential: 'UuRkAsEjWoPrAG8Y',
-  },
-];
 
 type ErrorType = 'camera_denied' | 'camera_not_found' | 'connection_timeout' | 'connection_failed' | null;
 

@@ -30,12 +30,12 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
 
       const file = e.target.files[0];
       const fileExt = file.name.split('.').pop();
-      const fileName = `${myProfile?.id}-${Math.random()}.${fileExt}`;
-      const filePath = `avatars/${fileName}`;
+      // 💡 تحسين: استخدام مسار ثابت لكل مستخدم لمنع تراكم الصور القديمة
+      const filePath = `avatars/${myProfile?.id}.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(filePath, file);
+        .upload(filePath, file, { upsert: true }); // upsert: true يقوم باستبدال الملف القديم
 
       if (uploadError) throw uploadError;
 

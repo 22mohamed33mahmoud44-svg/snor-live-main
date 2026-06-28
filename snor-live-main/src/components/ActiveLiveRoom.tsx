@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { supabase } from '../supabase';
+import { RTC_CONFIG_STUN_ONLY as ICE_SERVERS } from '../constants/iceServers';
 
 interface ActiveLiveRoomProps {
   streamId: string;
@@ -8,6 +9,7 @@ interface ActiveLiveRoomProps {
   myUserId: string;
   myUsername: string;
   onEndStream: () => void;
+  initialStream?: MediaStream | null;
 }
 
 interface ChatMessage {
@@ -33,14 +35,6 @@ interface ReceivedGift {
   cost: number;
 }
 
-const ICE_SERVERS: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-  ],
-};
-
 const giftAnimationStyle = `
   @keyframes giftSlideIn {
     from { opacity: 0; transform: translateY(-16px) scale(0.92); }
@@ -59,18 +53,44 @@ const giftAnimationStyle = `
 `;
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
+const MESSAGES_LIMIT = 30;
 
-export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, myUsername, onEndStream }: ActiveLiveRoomProps) {
+// ── 1. عزل مكون إدخال الشات لمنع إعادة تصيير الكاميرا مع كل حرف ──
+const ChatInputArea = memo(({ onSendMessage }: { onSendMessage: (text: string) => void }) => {
+  const [chatInput, setChatInput] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+    onSendMessage(chatInput.trim());
+    setChatInput('');
+  };
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
+      <input
+        type="text"
+        value={chatInput}
+        onChange={e => setChatInput(e.target.value)}
+        placeholder="تحدث مع المتابعين..."
+        style={{ flex: 1, background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '50px', padding: '12px 18px', color: '#fff', fontSize: '0.85rem', outline: 'none', backdropFilter: 'blur(10px)' }}
+      />
+      <button type="submit" style={{ width: 46, height: 46, borderRadius: '50%', background: 'linear-gradient(135deg, #00d4ff, #3b82f6)', border: 'none', fontSize: '1.1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 2px 10px rgba(59,130,246,0.3)' }}>💬</button>
+    </form>
+  );
+});
+
+// ── المكون الرئيسي ──
+export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, myUsername, onEndStream, initialStream }: ActiveLiveRoomProps) {
   const [viewers, setViewers]             = useState(1);
   const [likesCount, setLikesCount]       = useState(0);
   const [uptime, setUptime]               = useState(0);
   const [chatMessages, setChatMessages]   = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput]         = useState('');
   const [giftToast, setGiftToast]         = useState<GiftToast | null>(null);
   const [receivedGifts, setReceivedGifts] = useState<ReceivedGift[]>([]);
   const [bannedUsers, setBannedUsers]     = useState<Set<string>>(new Set());
   const [banToast, setBanToast]           = useState<string | null>(null);
-  const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null); // بديل للـ Hover عشان الموبايل باللمس
+  const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
 
   const videoRef            = useRef<HTMLVideoElement>(null);
   const streamRef           = useRef<MediaStream | null>(null);
@@ -88,8 +108,7 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
   ];
   const activeFilterEffect = filtersList.find(f => f.id === filterId)?.effect || 'none';
 
-  // ── Heartbeat ─────────────────────────────────────────────────────────────
-
+  // ── Heartbeat ──
   const sendHeartbeat = useCallback(async () => {
     const { error } = await supabase.rpc('update_stream_heartbeat', { p_stream_id: streamId });
     if (error) console.warn('Heartbeat error:', error.message);
@@ -107,8 +126,7 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
     }
   }, []);
 
-  // ── إنهاء البث بأمان ──────────────────────────────────────────────────────
-
+  // ── إنهاء البث بأمان ──
   const endStreamSafely = useCallback(async () => {
     stopHeartbeat();
     streamRef.current?.getTracks().forEach(t => t.stop());
@@ -122,39 +140,66 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
     onEndStream();
   }, [streamId, myUserId, stopHeartbeat, onEndStream]);
 
-  // ── الكاميرا (تعديل الأبعاد لتناسب شاشات الموبايل الرأسية 9:16) ──────────────
-
+  // ── الكاميرا (أبعاد مثالية للموبايل) ──
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia({
-      video: { 
-        facingMode: 'user', 
-        aspectRatio: 9 / 16, // إجبار المتصفح على الأبعاد العمودية
-        width: { ideal: 720, max: 1080 }, // أبعاد مثالية للموبايل لمنع استهلاك الباقة
-        height: { ideal: 1280, max: 1920 },
-        frameRate: { ideal: 24, max: 30 } 
-      },
-      audio: true,
-    }).then(stream => {
-      streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
-    }).catch(err => console.error('الكاميرا غير متاحة:', err));
+    if (initialStream) {
+      streamRef.current = initialStream;
+      if (videoRef.current) videoRef.current.srcObject = initialStream;
+    } else {
+      navigator.mediaDevices.getUserMedia({
+        video: { 
+          facingMode: 'user', 
+          aspectRatio: 9 / 16, 
+          width: { ideal: 720, max: 1080 }, 
+          height: { ideal: 1280, max: 1920 },
+          frameRate: { ideal: 24, max: 30 } 
+        },
+        audio: true,
+      }).then(stream => {
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+      }).catch(err => console.error('الكاميرا غير متاحة:', err));
+    }
 
     return () => {
       streamRef.current?.getTracks().forEach(t => t.stop());
       peerConnectionsRef.current.forEach(pc => pc.close());
       peerConnectionsRef.current.clear();
     };
+  }, [initialStream]);
+
+  // Keep the screen awake
+  useEffect(() => {
+    let wakeLock: WakeLockSentinel | null = null;
+    let cancelled = false;
+    const requestLock = async () => {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch {
+        // Wake Lock not supported
+      }
+    };
+    requestLock();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && !cancelled) requestLock();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisibility);
+      wakeLock?.release().catch(() => {});
+    };
   }, []);
 
-  // ── عداد الوقت ────────────────────────────────────────────────────────────
-
+  // ── العداد ──
   useEffect(() => {
     const timer = setInterval(() => setUptime(prev => prev + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // ── Heartbeat lifecycle ───────────────────────────────────────────────────
-
+  // ── دورة حياة البث ──
   useEffect(() => {
     if (!streamId) return;
     startHeartbeat();
@@ -183,10 +228,8 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
     };
   }, [streamId, startHeartbeat, stopHeartbeat]);
 
-  // ── دالة لتحديد سقف الـ Bitrate للموبايل لمنع تشنج البث والتهنيج ──────────────
-
+  // ── تحديد سقف Bitrate ──
   const applyBitrateLimit = async (pc: RTCPeerConnection) => {
-    // ننتظر حتى يبدأ تبادل التراكات
     setTimeout(async () => {
       const senders = pc.getSenders();
       const videoSender = senders.find(s => s.track?.kind === 'video');
@@ -194,11 +237,8 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
         try {
           const parameters = videoSender.getParameters();
           if (!parameters.encodings) parameters.encodings = [{}];
-          
-          // وضع سقف 450kbps؛ جودة خرافية وموفرة جداً للموبايل
           parameters.encodings[0].maxBitrate = 450_000; 
           await videoSender.setParameters(parameters);
-          console.log('✅ تم تحديد سقف الـ Bitrate بنجاح للمشاهد');
         } catch (e) {
           console.error('فشل تحديد سقف الـ Bitrate:', e);
         }
@@ -206,8 +246,7 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
     }, 2000);
   };
 
-  // ── Realtime channel ──────────────────────────────────────────────────────
-
+  // ── Realtime channel ──
   useEffect(() => {
     if (!streamId) return;
 
@@ -216,7 +255,7 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
       .select('*')
       .eq('stream_id', streamId)
       .order('created_at', { ascending: true })
-      .limit(30)
+      .limit(MESSAGES_LIMIT)
       .then(({ data }) => {
         if (data) {
           setChatMessages(data.map(m => ({
@@ -242,7 +281,7 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
         const newMsg = payload.new as any;
         setChatMessages(prev => {
           if (prev.some(m => m.id === newMsg.id)) return prev;
-          return [...prev.slice(-25), {
+          return [...prev.slice(-(MESSAGES_LIMIT - 1)), {
             id: newMsg.id,
             user: newMsg.username,
             userId: newMsg.user_id,
@@ -253,6 +292,10 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
       })
       .on('broadcast', { event: 'like' }, () => {
         setLikesCount(prev => prev + 1);
+      })
+      .on('broadcast', { event: 'like_batch' }, ({ payload }) => {
+        const count = payload?.count || 1;
+        setLikesCount(prev => prev + count);
       })
       .on('broadcast', { event: 'gift' }, ({ payload }) => {
         const id = Date.now() + Math.random();
@@ -309,8 +352,7 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
     return () => { supabase.removeChannel(roomChannel); };
   }, [streamId, myUserId]);
 
-  // ── WebRTC ────────────────────────────────────────────────────────────────
-
+  // ── WebRTC ──
   const createPeerConnection = (viewerId: string): RTCPeerConnection => {
     const pc = new RTCPeerConnection(ICE_SERVERS);
     if (streamRef.current) {
@@ -325,15 +367,12 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
       }
     };
     
-    // تطبيق سقف الـ Bitrate للاتصال الجديد فوراً لتوفير الباقة والحرارة
     applyBitrateLimit(pc);
-    
     peerConnectionsRef.current.set(viewerId, pc);
     return pc;
   };
 
-  // ── ✅ حظر مستخدم ─────────────────────────────────────────────────────────
-
+  // ── حظر مستخدم ──
   const handleBanUser = async (targetUserId: string, targetUsername: string) => {
     if (targetUserId === myUserId) return;
     if (bannedUsers.has(targetUserId)) {
@@ -358,25 +397,19 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
     setTimeout(() => setBanToast(null), 2500);
   };
 
-  // ── Chat ──────────────────────────────────────────────────────────────────
-
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
-    const text = chatInput.trim();
-    setChatInput('');
+  // ── Chat (تم تحسين الإرسال للحد من استهلاك الذاكرة) ──
+  const handleSendMessage = useCallback(async (text: string) => {
     const localId = Date.now().toString();
-    setChatMessages(prev => [...prev, { id: localId, user: myUsername || 'المذيع', userId: myUserId, text, color: '#ff2a74' }]);
+    setChatMessages(prev => [...prev.slice(-(MESSAGES_LIMIT - 1)), { id: localId, user: myUsername || 'المذيع', userId: myUserId, text, color: '#ff2a74' }]);
     await supabase.from('stream_chat').insert([{
       stream_id: streamId,
       user_id:   myUserId,
       username:  myUsername || 'المذيع',
       message:   text,
     }]);
-  };
+  }, [streamId, myUserId, myUsername]);
 
-  // ── End stream ────────────────────────────────────────────────────────────
-
+  // ── End stream ──
   const handleEndStream = () => {
     if (window.confirm('هل أنت متأكد أنك تريد إنهاء البث المباشر؟')) {
       endStreamSafely();
@@ -390,7 +423,8 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 9999, display: 'flex', flexDirection: 'column', direction: 'rtl', fontFamily: "'Cairo', sans-serif", overflow: 'hidden' }}>
+    // 🚀 تحسين قوي للموبايل: استخدام 100dvh لمنع اختفاء عناصر الواجهة خلف شريط المتصفح
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100dvh', background: '#000', zIndex: 9999, display: 'flex', flexDirection: 'column', direction: 'rtl', fontFamily: "'Cairo', sans-serif", overflow: 'hidden', WebkitTapHighlightColor: 'transparent' }}>
 
       <style>{giftAnimationStyle}</style>
 
@@ -462,14 +496,14 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
               <div
                 key={msg.id}
                 style={{ display: 'flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', maxWidth: '85%' }}
-                onClick={() => setSelectedMsgId(prev => prev === msg.id ? null : msg.id)} // الضغط يظهر زر الحظر للموبايل
+                onClick={() => setSelectedMsgId(prev => prev === msg.id ? null : msg.id)}
               >
                 <div style={{ display: 'inline-block', background: bannedUsers.has(msg.userId) ? 'rgba(239,68,68,0.2)' : 'rgba(0,0,0,0.45)', padding: '8px 14px', borderRadius: '18px', backdropFilter: 'blur(6px)', border: `1px solid ${bannedUsers.has(msg.userId) ? 'rgba(239,68,68,0.4)' : 'rgba(255,255,255,0.08)'}` }}>
                   <span style={{ color: msg.color, fontSize: '0.75rem', fontWeight: 800, marginLeft: '6px' }}>{msg.user}:</span>
                   <span style={{ color: '#fff', fontSize: '0.8rem' }}>{msg.text}</span>
                 </div>
 
-                {/* زر الحظر باللمس يظهر للمذيع فور الضغط على رسالة المستخدم */}
+                {/* زر الحظر باللمس */}
                 {msg.userId !== myUserId && selectedMsgId === msg.id && (
                   <button
                     onClick={(e) => {
@@ -491,17 +525,8 @@ export default function ActiveLiveRoom({ streamId, title, filterId, myUserId, my
             ))}
           </div>
 
-          {/* صندوق إدخال الشات العريض والمريح لإصبع الإبهام */}
-          <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
-            <input
-              type="text"
-              value={chatInput}
-              onChange={e => setChatInput(e.target.value)}
-              placeholder="تحدث مع المتابعين..."
-              style={{ flex: 1, background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '50px', padding: '12px 18px', color: '#fff', fontSize: '0.85rem', outline: 'none', backdropFilter: 'blur(10px)' }}
-            />
-            <button type="submit" style={{ width: 46, height: 46, borderRadius: '50%', background: 'linear-gradient(135deg, #00d4ff, #3b82f6)', border: 'none', fontSize: '1.1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 2px 10px rgba(59,130,246,0.3)' }}>💬</button>
-          </form>
+          {/* صندوق إدخال الشات المعزول لمنع إعادة التصيير */}
+          <ChatInputArea onSendMessage={handleSendMessage} />
         </div>
       </div>
     </div>

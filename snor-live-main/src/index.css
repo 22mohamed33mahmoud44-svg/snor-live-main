@@ -12,11 +12,39 @@ html {
   scroll-behavior: smooth;
 }
 
+:root {
+  color-scheme: dark;
+  --app-max-width: 1400px;
+}
+
 body {
   background-color: #0A0A0F;
   color: #FFFFFF;
   font-family: 'Tajawal', 'Inter', sans-serif;
   overflow-x: hidden;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.page-shell,
+.section-shell {
+  width: min(100%, var(--app-max-width));
+  margin-inline: auto;
+}
+
+.safe-area-bottom {
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 1024px) {
+  .section-shell {
+    width: min(100%, 1280px);
+  }
 }
 
 /* Custom scrollbar */

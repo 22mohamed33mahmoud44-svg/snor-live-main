@@ -1,6 +1,7 @@
-import { useState } from 'react';
+
 import type { SettingsPanelProps } from '../types';
 import { LogoutIcon } from './icons/Icons';
+import { useSettings } from '../context/SettingsContext';
 
 // ── Setting Row ──────────────────────────────────────────────────
 interface SettingRowProps {
@@ -63,13 +64,7 @@ const Section = ({ title, children }: { title: string; children: React.ReactNode
 
 // ── Main Component ───────────────────────────────────────────────
 export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit }: SettingsPanelProps) {
-  const [notif,     setNotif]     = useState(true);
-  const [sound,     setSound]     = useState(true);
-  const [liveNotif, setLiveNotif] = useState(false);
-  const [discover,  setDiscover]  = useState(true);
-  const [hideOnline,setHideOnline]= useState(false);
-  const [dark,      setDark]      = useState(true);
-  const [neon,      setNeon]      = useState(true);
+  const { settings, updateSetting } = useSettings();
 
   return (
     <div
@@ -130,29 +125,77 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
         <div style={{ padding: '0 16px' }}>
 
           <Section title="🔔 الإشعارات">
-            <SettingRow icon="💬" iconBg="rgba(0,212,255,.1)"   label="تنبيهات الرسائل"      desc="إشعار عند وصول رسالة جديدة"  checked={notif}     onChange={() => setNotif(!notif)} />
-            <SettingRow icon="🔊" iconBg="rgba(168,85,247,.1)" label="الأصوات والمؤثرات"    desc="نغمات البث والرادار"          checked={sound}     onChange={() => setSound(!sound)} />
-            <SettingRow icon="📡" iconBg="rgba(74,222,128,.1)" label="إشعارات البث المباشر" desc="تنبيه عند بدء بث جديد"        checked={liveNotif} onChange={() => setLiveNotif(!liveNotif)}
+            <SettingRow 
+              icon="💬" 
+              iconBg="rgba(0,212,255,.1)"   
+              label="تنبيهات الرسائل"      
+              desc="إشعار عند وصول رسالة جديدة"  
+              checked={settings?.notif}     
+              onChange={() => updateSetting('notif', !settings.notif)} 
+            />
+            <SettingRow 
+              icon="🔊" 
+              iconBg="rgba(168,85,247,.1)" 
+              label="الأصوات والمؤثرات"    
+              desc="نغمات البث والرادار"          
+              checked={settings?.sound}     
+              onChange={() => updateSetting('sound', !settings.sound)} 
+            />
+            <SettingRow 
+              icon="📡" 
+              iconBg="rgba(74,222,128,.1)" 
+              label="إشعارات البث المباشر" 
+              desc="تنبيه عند بدء بث جديد"        
+              checked={settings?.liveNotif} 
+              onChange={() => updateSetting('liveNotif', !settings.liveNotif)}
               type="toggle"
             />
           </Section>
 
           <Section title="🔒 الخصوصية والأمان">
-            <SettingRow icon="🌐" iconBg="rgba(0,212,255,.1)"   label="الظهور في الرادار"  desc="يسمح للآخرين باكتشافك"          checked={discover}   onChange={() => setDiscover(!discover)} />
-            <SettingRow icon="👁️" iconBg="rgba(168,85,247,.1)" label="إخفاء آخر ظهور"     desc="لا يرى أحد متى كنت متصل"        checked={hideOnline} onChange={() => setHideOnline(!hideOnline)} />
+            <SettingRow 
+              icon="🌐" 
+              iconBg="rgba(0,212,255,.1)"   
+              label="الظهور في الرادار"  
+              desc="يسمح للآخرين باكتشافك"          
+              checked={settings?.discover}  
+              onChange={() => updateSetting('discover', !settings.discover)} 
+            />
+            <SettingRow 
+              icon="👁️" 
+              iconBg="rgba(168,85,247,.1)" 
+              label="إخفاء آخر ظهور"     
+              desc="لا يرى أحد متى كنت متصل"        
+              checked={settings?.hideOnline} 
+              onChange={() => updateSetting('hideOnline', !settings.hideOnline)} 
+            />
             <div style={{ borderBottom: 'none' }}>
               <SettingRow icon="🚫" iconBg="rgba(239,68,68,.1)" label="قائمة الحظر" desc="إدارة المستخدمين المحظورين" type="badge" badge={3} />
             </div>
           </Section>
 
           <Section title="🎨 المظهر والواجهة">
-            <SettingRow icon="🌙" iconBg="rgba(168,85,247,.1)" label="الوضع الليلي"   desc="خلفية داكنة مريحة للعين" checked={dark} onChange={() => setDark(!dark)} />
-            <SettingRow icon="✨" iconBg="rgba(0,212,255,.1)"  label="تأثيرات النيون" desc="إضاءة وتوهج الواجهة"     checked={neon} onChange={() => setNeon(!neon)} />
+            <SettingRow 
+              icon="🌙" 
+              iconBg="rgba(168,85,247,.1)" 
+              label="الوضع الليلي"   
+              desc="خلفية داكنة مريحة للعين" 
+              checked={settings?.dark} 
+              onChange={() => updateSetting('dark', !settings.dark)} 
+            />
+            <SettingRow 
+              icon="✨" 
+              iconBg="rgba(0,212,255,.1)"  
+              label="تأثيرات النيون" 
+              desc="إضاءة وتوهج الواجهة"     
+              checked={settings?.neon} 
+              onChange={() => updateSetting('neon', !settings.neon)} 
+            />
           </Section>
 
           <Section title="⚙️ الحساب">
-            <SettingRow icon="🌍" iconBg="rgba(245,158,11,.1)" label="اللغة"          desc="العربية"    type="arrow" />
-            <SettingRow icon="📞" iconBg="rgba(0,212,255,.1)"  label="جودة المكالمات" desc="HD تلقائي"  type="arrow" />
+            <SettingRow icon="🌍" iconBg="rgba(245,158,11,.1)" label="اللغة" desc="العربية" type="arrow" />
+            <SettingRow icon="📞" iconBg="rgba(0,212,255,.1)"  label="جودة المكالمات" desc="HD تلقائي" type="arrow" />
             <div style={{ borderBottom: 'none' }}>
               <SettingRow icon="ℹ️" iconBg="rgba(74,222,128,.1)" label="عن التطبيق" desc="الإصدار 2.1.0" type="arrow" />
             </div>

@@ -11,6 +11,18 @@ export const GLOBAL_CSS = `
   @keyframes radar-pulse { 0% { transform: scale(0.9); opacity: 0.8; } 100% { transform: scale(2.2); opacity: 0; } }
 
   .glass-capsule-header { display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); padding: 5px 8px; border-radius: 20px; backdrop-filter: blur(15px); }
+
+  .dashboard-shell { position: fixed; inset: 0; background: #03030a; display: flex; flex-direction: column; direction: rtl; color: #f0f0ff; overflow: hidden; padding-bottom: env(safe-area-inset-bottom); }
+  .dashboard-header { padding: 0 16px; height: 64px; background: rgba(5,5,12,.5); backdrop-filter: blur(30px); border-bottom: 1px solid rgba(255,255,255,.04); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; z-index: 20; }
+  .dashboard-content { flex: 1; overflow-y:auto; padding-bottom: calc(95px + env(safe-area-inset-bottom)); }
+  .dashboard-bottom-nav { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); width: min(94vw, 680px); height: 68px; z-index: 100; background: rgba(10,10,22,0.8); backdrop-filter: blur(30px); border-radius: 24px; border: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: space-around; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+
+  @media (min-width: 1024px) {
+    .dashboard-shell { padding-inline: 24px; }
+    .dashboard-header { max-width: 1400px; width: 100%; margin: 0 auto; border-radius: 0 0 24px 24px; }
+    .dashboard-content { max-width: 1400px; width: 100%; margin: 0 auto; padding-inline: 18px; }
+    .dashboard-bottom-nav { bottom: 20px; }
+  }
   
   .btn-charge-small { padding: 6px 12px; border-radius: 12px; background: linear-gradient(135deg,#7c3aed,#00d4ff); border: none; color: #fff; font-size: 0.8rem; font-weight: 800; cursor: pointer; transition: transform 0.2s; box-shadow: 0 2px 8px rgba(0,212,255,0.2); }
   .btn-charge-small:active { transform: scale(0.95); }

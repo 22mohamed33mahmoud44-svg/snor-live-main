@@ -7,6 +7,7 @@ import BuyCoins from './BuyCoins';
 import EditProfileModal from './components/EditProfileModal';
 import LiveStreamGrid from './components/LiveStreamGrid';
 import VideoCall from './VideoCall';
+import RandomMatch from './RandomMatch';
 import LiveStreamStudio from './components/LiveStreamStudio';
 import ActiveLiveRoom from './components/ActiveLiveRoom';
 import PrivateChat from './components/PrivateChat';
@@ -27,6 +28,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   const [myProfile, setMyProfile] = useState<Profile>({ id: userId, full_name: 'مستخدم سنور', username: 'snor_user' });
   const [openChat, setOpenChat] = useState<ChatOther | null>(null);
   const [activeCall, setActiveCall] = useState<CallState | null>(null);
+  const [showRandomMatch, setShowRandomMatch] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -36,7 +38,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
 
   // 🆕 البث المباشر (تم إضافة streamId لحفظ رقم البث على السيرفر)
   const [showLiveStudio, setShowLiveStudio] = useState(false);
-  const [activeLiveStream, setActiveLiveStream] = useState<{ id: string, title: string; filterId: string } | null>(null);
+  const [activeLiveStream, setActiveLiveStream] = useState<{ id: string, title: string; filterId: string; stream?: MediaStream | null } | null>(null);
 
   // ── Handlers ─────────────────────────────────────────────────
   const handleStartCall = useCallback((remoteId: string, type: 'video' | 'audio') => {
@@ -46,7 +48,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   }, [userId]);
 
   // 🚀 دالة إطلاق البث المطورة للربط بقاعدة البيانات
-  const handleLaunchLiveStream = async (title: string, filterId: string) => {
+  const handleLaunchLiveStream = async (title: string, filterId: string, _intensity?: number, stream?: MediaStream | null) => {
     // 1. تسجيل البث في Supabase عشان يظهر لكل المستخدمين في الرئيسية
     const { data, error } = await supabase
       .from('live_streams')
@@ -69,7 +71,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
 
     // 2. قفل الاستوديو وفتح غرفة البث الحقيقية بالـ ID الجديد
     setShowLiveStudio(false);
-    setActiveLiveStream({ id: data.id, title, filterId });
+    setActiveLiveStream({ id: data.id, title, filterId, stream });
   };
 
   // ── Data Fetching ─────────────────────────────────────────────
@@ -134,7 +136,8 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   const totalUnread = conversations.reduce((s, c) => s + c.unread, 0);
 
   // ── Screen Router ─────────────────────────────────────────────
-  if (activeCall) return <VideoCall userId={userId} matchId={activeCall.matchId} remoteUserId={activeCall.remoteUserId} onEnd={() => setActiveCall(null)} onNext={() => setActiveCall(null)} />;
+  if (activeCall) return <VideoCall userId={userId} matchId={activeCall.matchId} remoteUserId={activeCall.remoteUserId} onEnd={() => setActiveCall(null)} onNext={() => { setActiveCall(null); setShowRandomMatch(true); }} />;
+  if (showRandomMatch) return <RandomMatch userId={userId} onClose={() => setShowRandomMatch(false)} onMatch={(match) => { setShowRandomMatch(false); const remoteUserId = match.user1 === userId ? match.user2 : match.user1; setActiveCall({ matchId: match.id, remoteUserId, type: 'video' }); }} />;
   if (openChat) return <PrivateChat myId={userId} other={openChat} onBack={() => setOpenChat(null)} onStartCall={handleStartCall} />;
   if (showSettings) return <SettingsPanel onClose={() => setShowSettings(false)} myProfile={myProfile} onLogout={onLogout} onOpenEdit={() => { setShowSettings(false); setShowEditProfile(true); }} />;
   if (showEditProfile) return <EditProfileModal myProfile={myProfile} onClose={() => setShowEditProfile(false)} onProfileUpdated={(updated) => setMyProfile(updated)} />;
@@ -147,6 +150,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
         streamId={activeLiveStream.id}
         title={activeLiveStream.title} 
         filterId={activeLiveStream.filterId} 
+        initialStream={activeLiveStream.stream}
         myUserId={userId}
         myUsername={myProfile?.full_name || "مستضيف البث"}
         onEndStream={async () => {
@@ -166,11 +170,11 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
 
   // ── Render ────────────────────────────────────────────────────
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#03030a', display: 'flex', flexDirection: 'column', direction: 'rtl', color: '#f0f0ff', overflow: 'hidden' }}>
+    <div className="dashboard-shell">
       <style>{GLOBAL_CSS}</style>
 
       {/* ── Header ── */}
-      <div style={{ padding: '0 16px', height: '64px', background: 'rgba(5,5,12,.5)', backdropFilter: 'blur(30px)', borderBottom: '1px solid rgba(255,255,255,.04)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, zIndex: 20 }}>
+      <div className="dashboard-header">
         <SnorLiveLogo />
         <div className="glass-capsule-header">
           <CoinsBalance />
@@ -188,7 +192,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       </div>
 
       {/* ── Tab Content ── */}
-      <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 95 }}>
+      <div className="dashboard-content">
 
         {/* HOME TAB */}
         {tab === 'home' && (
@@ -231,7 +235,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
               <div className="pulse-ring ring-1" />
               <div className="pulse-ring ring-2" />
               <div className="pulse-ring ring-3" />
-              <button type="button" onClick={() => handleStartCall('random_user', 'video')} className="btn-match-giant">
+              <button type="button" onClick={() => setShowRandomMatch(true)} className="btn-match-giant">
                 <div className="inner-glow-circle">
                   <VideoIcon size={36} />
                   <span style={{ fontSize: '1.05rem', fontWeight: 800, marginTop: 10 }}>ابدأ المطابقة</span>
@@ -329,7 +333,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       )}
 
       {/* ── Bottom Navigation ── */}
-      <nav style={{ position: 'fixed', bottom: 12, left: 16, right: 16, height: 68, zIndex: 100, background: 'rgba(10,10,22,0.8)', backdropFilter: 'blur(30px)', borderRadius: '24px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-around', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+      <nav className="dashboard-bottom-nav">
         {[
           { key: 'home',  label: 'الرئيسية', icon: <HomeIcon /> },
           { key: 'match', label: 'اكتشف',    icon: <UsersIcon /> },

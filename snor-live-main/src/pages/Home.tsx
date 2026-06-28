@@ -78,7 +78,7 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch, on
   );
 
   const SectionHeader = ({ ar, en }: { ar: string; en: string }) => (
-    <div className="text-center mb-16 fade-in-scroll">
+    <div className="text-center mb-12 md:mb-16 fade-in-scroll max-w-3xl mx-auto">
       <h2 className="text-4xl md:text-5xl font-bold mb-4 font-cairo">
         <span className="gradient-text">{ar}</span>
       </h2>
@@ -100,10 +100,10 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch, on
       <div className="gradient-mesh" aria-hidden="true" />
 
       {/* ── Hero ── */}
-      <section id="home" className="min-h-screen flex items-center pt-16 md:pt-20">
-        <div className="container mx-auto px-4 py-8">
-          <div className="flex flex-col md:grid md:grid-cols-2 md:gap-12 md:items-center">
-            <div className="fade-in-scroll order-1 md:order-2 text-center md:text-right mb-6 md:mb-0">
+      <section id="home" className="min-h-screen flex items-center pt-16 md:pt-20 lg:pt-24">
+        <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8 max-w-7xl">
+          <div className="flex flex-col lg:grid lg:grid-cols-[1.05fr_0.95fr] lg:gap-16 lg:items-center">
+            <div className="fade-in-scroll order-1 lg:order-2 text-center lg:text-right mb-6 lg:mb-0 lg:pr-6">
               <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-1.5 mb-5">
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                 <span className="text-sm text-text-gray font-cairo">🔴 الآن على الهواء</span>
@@ -116,15 +116,15 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch, on
               <p className="text-text-gray mb-8 font-inter text-base md:text-lg">
                 {lang === 'ar' ? 'تواصل مع العالم في ثوانٍ عشوائياً وآمناً' : 'Connect with the world in seconds securely'}
               </p>
-              <div className="flex flex-col sm:flex-row gap-3 mb-10 md:mb-0">
-                <button type="button" className="btn-primary text-base py-4 flex items-center justify-center gap-2 w-full sm:w-auto sm:px-8"
+              <div className="flex flex-col sm:flex-row gap-3 mb-10 md:mb-0 lg:justify-start">
+                <button type="button" className="btn-primary text-base py-4 flex items-center justify-center gap-2 w-full sm:w-auto sm:px-8 lg:min-w-[220px]"
                   onClick={() => user ? onStartRandomMatch() : onShowAuth()}>
                   🎥 {t.hero.cta}<ChevronRight size={18} />
                 </button>
-                <InstallButton className="text-base py-4 w-full sm:w-auto sm:px-8" />
+                <InstallButton className="text-base py-4 w-full sm:w-auto sm:px-8 lg:min-w-[220px]" />
               </div>
             </div>
-            <div className="relative flex justify-center items-center fade-in-scroll order-2 md:order-1 mb-8 md:mb-0">
+            <div className="relative flex justify-center items-center fade-in-scroll order-2 lg:order-1 mb-8 lg:mb-0">
               <div className="relative">
                 <FloatingGem className="absolute -top-8 -left-16 hidden md:block" />
                 <FloatingGem className="absolute top-16 -right-16 animate-float-slow hidden md:block" />
@@ -161,7 +161,7 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch, on
               </div>
             </div>
           </div>
-          <div className="order-3 mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 fade-in-scroll">
+          <div className="order-3 mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 fade-in-scroll max-w-5xl mx-auto">
             {[
               { num: '+500K', label: t.stats.users },
               { num: '+80',   label: t.stats.countries },
@@ -196,7 +196,7 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch, on
 
       {/* ── Gems ── */}
       <section id="gems" className="py-20 relative overflow-hidden">
-        <div className="container mx-auto px-4 relative z-10">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-7xl relative z-10">
           <SectionHeader ar={t.gems.title} en={t.gems.titleEn} />
           <div className="grid md:grid-cols-3 gap-6 mb-14">
             {t.gems.steps.map((step: any, i: number) => (

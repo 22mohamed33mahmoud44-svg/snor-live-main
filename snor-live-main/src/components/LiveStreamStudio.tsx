@@ -23,6 +23,22 @@ interface FilterType {
 
 type CameraStatus = 'idle' | 'loading' | 'ready' | 'error';
 
+// 💡 تحسين: نقل قائمة الفلاتر خارج المكون لمنع إعادة إنشائها مع كل render
+const filtersList: FilterType[] = [
+  { id: 'natural', name: 'طبيعي Real', icon: '✨', getEffect: () => 'none', unit: '%', defaultVal: 0, min: 0, max: 0 },
+  { id: 'beauty', name: 'نعومة الـ 4K', icon: '🧼', getEffect: (v) => `blur(${v * 0.012}px) brightness(${1 + v * 0.0006})`, unit: '%', defaultVal: 65, min: 0, max: 100 },
+  { id: 'brightness', name: 'إضاءة سينمائية', icon: '💡', getEffect: (v) => `brightness(${1 + v * 0.0035})`, unit: '%', defaultVal: 50, min: 0, max: 100 },
+  { id: 'blush', name: 'توريد البشرة', icon: '🌸', getEffect: (v) => `hue-rotate(${360 - v * 0.25}deg) saturate(${1 + v * 0.004})`, unit: '%', defaultVal: 40, min: 0, max: 100 },
+  { id: 'contour', name: 'تحديد ملامح', icon: '🎭', getEffect: (v) => `contrast(${1 + v * 0.004})`, unit: '%', defaultVal: 50, min: 0, max: 100 },
+  { id: 'teeth', name: 'ابتسامة ناصعة', icon: '😁', getEffect: (v) => `brightness(${1 + v * 0.0015}) contrast(${1 + v * 0.0015})`, unit: '%', defaultVal: 60, min: 0, max: 100 },
+  { id: 'eyes', name: 'حدة البؤرة', icon: '👁️', getEffect: (v) => `contrast(${1 + v * 0.004})`, unit: '%', defaultVal: 50, min: 0, max: 100 },
+  { id: 'cinematic', name: 'دافئ كلاسيك', icon: '🍿', getEffect: (v) => `sepia(${v * 0.0035})`, unit: '%', defaultVal: 55, min: 0, max: 100 },
+  { id: 'cyberpunk', name: 'فوشيا نيون', icon: '👾', getEffect: (v) => `hue-rotate(${300 + v * 0.4}deg)`, unit: '%', defaultVal: 50, min: 0, max: 100 },
+  { id: 'vintage', name: 'أفلام قديمة', icon: '📜', getEffect: (v) => `grayscale(${v * 0.007})`, unit: '%', defaultVal: 40, min: 0, max: 100 },
+  { id: 'clear', name: 'نقاء كريستال', icon: '💎', getEffect: (v) => `contrast(${1 + v * 0.005})`, unit: '%', defaultVal: 50, min: 0, max: 100 },
+  { id: 'mystic', name: 'سحر الغموض', icon: '🔮', getEffect: (v) => `hue-rotate(${v * 0.7}deg)`, unit: '%', defaultVal: 45, min: 0, max: 100 },
+];
+
 export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioProps) {
   const [streamTitle, setStreamTitle] = useState('');
   const [isMicMuted, setIsMicMuted] = useState(false);
@@ -83,9 +99,6 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
         });
       }
 
-      stream.getAudioTracks().forEach(t => (t.enabled = !isMicMuted));
-      stream.getVideoTracks().forEach(t => (t.enabled = !isCamOff));
-
       setCameraStatus('ready');
     } catch (err) {
       console.error('🔮 Camera System Error:', err);
@@ -99,7 +112,7 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
         setCameraError('حدث خطأ غير متوقع أثناء تشغيل الكاميرا. حاول مرة أخرى.');
       }
     }
-  }, [isCamOff, isMicMuted]);
+  }, []);
 
   useEffect(() => {
     initCamera();
@@ -147,21 +160,6 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
     handedOffRef.current = false;
     onClose();
   };
-
-  const filtersList: FilterType[] = [
-    { id: 'natural', name: 'طبيعي Real', icon: '✨', getEffect: () => 'none', unit: '%', defaultVal: 0, min: 0, max: 0 },
-    { id: 'beauty', name: 'نعومة الـ 4K', icon: '🧼', getEffect: (v) => `blur(${v * 0.012}px) brightness(${1 + v * 0.0006})`, unit: '%', defaultVal: 65, min: 0, max: 100 },
-    { id: 'brightness', name: 'إضاءة سينمائية', icon: '💡', getEffect: (v) => `brightness(${1 + v * 0.0035})`, unit: '%', defaultVal: 50, min: 0, max: 100 },
-    { id: 'blush', name: 'توريد البشرة', icon: '🌸', getEffect: (v) => `hue-rotate(${360 - v * 0.25}deg) saturate(${1 + v * 0.004})`, unit: '%', defaultVal: 40, min: 0, max: 100 },
-    { id: 'contour', name: 'تحديد ملامح', icon: '🎭', getEffect: (v) => `contrast(${1 + v * 0.004})`, unit: '%', defaultVal: 50, min: 0, max: 100 },
-    { id: 'teeth', name: 'ابتسامة ناصعة', icon: '😁', getEffect: (v) => `brightness(${1 + v * 0.0015}) contrast(${1 + v * 0.0015})`, unit: '%', defaultVal: 60, min: 0, max: 100 },
-    { id: 'eyes', name: 'حدة البؤرة', icon: '👁️', getEffect: (v) => `contrast(${1 + v * 0.004})`, unit: '%', defaultVal: 50, min: 0, max: 100 },
-    { id: 'cinematic', name: 'دافئ كلاسيك', icon: '🍿', getEffect: (v) => `sepia(${v * 0.0035})`, unit: '%', defaultVal: 55, min: 0, max: 100 },
-    { id: 'cyberpunk', name: 'فوشيا نيون', icon: '👾', getEffect: (v) => `hue-rotate(${300 + v * 0.4}deg)`, unit: '%', defaultVal: 50, min: 0, max: 100 },
-    { id: 'vintage', name: 'أفلام قديمة', icon: '📜', getEffect: (v) => `grayscale(${v * 0.007})`, unit: '%', defaultVal: 40, min: 0, max: 100 },
-    { id: 'clear', name: 'نقاء كريستال', icon: '💎', getEffect: (v) => `contrast(${1 + v * 0.005})`, unit: '%', defaultVal: 50, min: 0, max: 100 },
-    { id: 'mystic', name: 'سحر الغموض', icon: '🔮', getEffect: (v) => `hue-rotate(${v * 0.7}deg)`, unit: '%', defaultVal: 45, min: 0, max: 100 },
-  ];
 
   const activeFilterObj = filtersList.find(f => f.id === selectedFilter) || filtersList[0];
   const computedFilterStyle = activeFilterObj.getEffect(filterIntensity);

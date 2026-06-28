@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 
 interface SplashProps {
   onDone: () => void;
@@ -6,14 +6,16 @@ interface SplashProps {
 
 export default function Splash({ onDone }: SplashProps) {
   const [phase, setPhase] = useState<'in' | 'hold' | 'out'>('in');
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
 
   useEffect(() => {
     // Fade in → hold → fade out
     const t1 = setTimeout(() => setPhase('hold'), 600);
-    const t2 = setTimeout(() => setPhase('out'),  2200);
-    const t3 = setTimeout(() => onDone(),          2900);
+    const t2 = setTimeout(() => setPhase('out'), 2200);
+    const t3 = setTimeout(() => onDoneRef.current(), 2900);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, [onDone]);
+  }, []);
 
   return (
     <div
