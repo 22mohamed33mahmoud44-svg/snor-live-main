@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from './supabase';
-import { STUN_SERVERS as ICE_SERVERS } from './constants/iceServers';
+import { LiveKitRoom, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
+import { Track, ConnectionState } from 'livekit-client';
 
 type Props = {
   userId: string;
@@ -30,384 +31,39 @@ const NextIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="non
 const EndIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="2" x2="22" y1="2" y2="22"/></svg>;
 const SendIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>;
 
+// ── المكون الرئيسي للغرفة الذي يغلف الاتصال بخوادم LiveKit ──
 export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext }: Props) {
-  const localVideoRef  = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const peerRef        = useRef<RTCPeerConnection | null>(null);
-  const streamRef      = useRef<MediaStream | null>(null);
-  const sigChannelRef  = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const chatChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const isMounted      = useRef(true);
-  const connectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sfxRef         = useRef<HTMLAudioElement | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorType>(null);
+  const [muted, setMuted] = useState(false);
+  const [camOff, setCamOff] = useState(false);
 
-  const iceCandidateQueue = useRef<RTCIceCandidateInit[]>([]);
-  const remoteDescSet     = useRef(false);
-  const offerSent         = useRef(false);
-  const isOfferer         = useRef(false);
-
-  const [muted,        setMuted]        = useState(false);
-  const [camOff,       setCamOff]       = useState(false);
-  const [mirrored,     setMirrored]     = useState(true);
-  const [duration,     setDuration]     = useState(0);
-  const [messages,     setMessages]     = useState<{ id: string; sender_id: string; message: string }[]>([]);
-  const [input,        setInput]        = useState('');
-  const [showChat,     setShowChat]     = useState(false);
-  const [connected,    setConnected]    = useState(false);
-  const [showControls, setShowControls] = useState(true);
-  const [newMsg,       setNewMsg]       = useState(false);
-  const [error,        setError]        = useState<ErrorType>(null);
-  const controlsTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  const log = useCallback((msg: string) => console.log('🎥 [VideoCall PRO]:', msg), []);
-
-  const playSFX = useCallback((src: string, loop = false) => {
-    if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; }
-    const audio = new Audio(src);
-    audio.loop = loop;
-    audio.volume = 0.4;
-    audio.play().catch(() => {});
-    sfxRef.current = audio;
-  }, []);
-
-  const stopSFX = useCallback(() => {
-    if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; }
-  }, []);
-
-  const sendSignal = useCallback(async (type: string, data: unknown) => {
-    const { error } = await supabase.from('signals').insert({
-      match_id: matchId, type, data, sender: userId,
-    });
-    if (error) log(`send ${type} failed: ${error.message}`);
-  }, [matchId, userId, log]);
-
-  const flushIceCandidates = useCallback(async () => {
-    const peer  = peerRef.current;
-    const queue = iceCandidateQueue.current.splice(0);
-    if (!peer || queue.length === 0) return;
-    for (const c of queue) {
-      try { await peer.addIceCandidate(new RTCIceCandidate(c)); }
-      catch (e) { console.warn('ICE flush error:', e); }
-    }
-  }, []);
-
-  const applyRemoteDescription = useCallback(async (peer: RTCPeerConnection, sdp: RTCSessionDescriptionInit) => {
-    if (remoteDescSet.current) return;
-    await peer.setRemoteDescription(new RTCSessionDescription(sdp));
-    remoteDescSet.current = true;
-    await flushIceCandidates();
-  }, [flushIceCandidates]);
-
-  const resetControlsTimer = useCallback(() => {
-    setShowControls(true);
-    if (controlsTimer.current) clearTimeout(controlsTimer.current);
-    controlsTimer.current = setTimeout(() => {
-      if (!showChat) setShowControls(false);
-    }, 5000); 
-  }, [showChat]);
-
-  // تنظيف كامل ومطلق للذاكرة والقنوات لمنع أي تعليق (حل المشكلة 9)
-  const cleanupConnections = useCallback(async () => {
-    stopSFX();
-    if (connectionTimer.current) clearTimeout(connectionTimer.current);
-    if (controlsTimer.current) clearTimeout(controlsTimer.current);
-    
-    peerRef.current?.close();
-    peerRef.current = null;
-    
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-    
-    if (localVideoRef.current)  localVideoRef.current.srcObject  = null;
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-    
-    if (sigChannelRef.current)  { await supabase.removeChannel(sigChannelRef.current);  sigChannelRef.current  = null; }
-    if (chatChannelRef.current) { await supabase.removeChannel(chatChannelRef.current); chatChannelRef.current = null; }
-  }, [stopSFX]);
-
-  const endMatch = useCallback(async () => {
-    playSFX(SFX_END);
-    await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId);
-    await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId });
-    await cleanupConnections();
-  }, [matchId, userId, playSFX, cleanupConnections]);
-
-  const handleEnd = useCallback(async () => {
-    await endMatch();
-    onEnd();
-  }, [endMatch, onEnd]);
-
-  const handleNext = useCallback(async () => {
-    await endMatch();
-    onNext(); // الـ Next سيعمل الآن فوراً ومن أول ضغطة بدون تعليق (حل المشكلة 8)
-  }, [endMatch, onNext]);
-
+  // 1. جلب التوكن الخاص بـ LiveKit لغرفة الماتش
   useEffect(() => {
-    resetControlsTimer();
-    return () => { if (controlsTimer.current) clearTimeout(controlsTimer.current); stopSFX(); };
-  }, [resetControlsTimer, stopSFX]);
-
-  useEffect(() => {
-    if (!connected) return;
-    const t = setInterval(() => setDuration(d => d + 1), 1000);
-    return () => clearInterval(t);
-  }, [connected]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  useEffect(() => {
-    isMounted.current         = true;
-    remoteDescSet.current     = false;
-    offerSent.current         = false;
-    isOfferer.current         = false;
-    iceCandidateQueue.current = [];
-    
-    if (!connected) playSFX(SFX_CONNECTING, true);
-
-    const start = async () => {
+    let isMounted = true;
+    const fetchToken = async () => {
       try {
-        // طلب الكاميرا والميكروفون بأبعاد فخمة متناسقة مع التابلت والموبايل
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1080 },
-            height: { ideal: 1920 },
-            facingMode: 'user',
-            frameRate: { ideal: 30 }
-          },
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        const { data, error: reqError } = await supabase.functions.invoke('livekit-token', {
+          body: { room: matchId, username: userId, isStreamer: true } // isStreamer لتفعيل الإرسال
         });
-
-        if (!isMounted.current) { stream.getTracks().forEach(t => t.stop()); return; }
-        streamRef.current = stream;
-        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-
-        connectionTimer.current = setTimeout(() => {
-          if (!isMounted.current || connected) return;
-          setError('connection_timeout');
-        }, 30000);
-
-        const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-        peerRef.current = peer;
-
-        peer.onconnectionstatechange = () => {
-          if (!isMounted.current) return;
-          const state = peer.connectionState;
-          log(`حالة بروتوكول الاتصال: ${state}`);
-          if (state === 'connected') {
-            setConnected(true);
-            setError(null);
-            stopSFX();
-            if (connectionTimer.current) clearTimeout(connectionTimer.current);
-          }
-          if (state === 'failed') {
-            setError('connection_failed');
-            peer.restartIce();
-          }
-          if (state === 'disconnected') setConnected(false);
-        };
-
-        peer.oniceconnectionstatechange = () => {
-          if (peer.iceConnectionState === 'failed') {
-            peer.restartIce();
-          }
-        };
-
-        stream.getTracks().forEach(t => peer.addTrack(t, stream));
-
-        peer.ontrack = e => {
-          if (remoteVideoRef.current && e.streams[0])
-            remoteVideoRef.current.srcObject = e.streams[0];
-        };
-
-        peer.onicecandidate = e => {
-          if (!e.candidate || !isMounted.current) return;
-          sendSignal('candidate', e.candidate.toJSON());
-        };
-
-        const channelName = `vc-${matchId}-${Date.now()}`;
-        const sigChannel = supabase
-          .channel(channelName)
-          .on('postgres_changes',
-            { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` },
-            async payload => {
-              if (!isMounted.current) return;
-              const msg = payload.new as { sender: string; type: string; data: any };
-              if (msg.sender === userId) return;
-              const p = peerRef.current;
-              if (!p || p.signalingState === 'closed') return;
-              try {
-                if (msg.type === 'offer') {
-                  if (isOfferer.current || p.signalingState !== 'stable') return;
-                  await applyRemoteDescription(p, msg.data);
-                  const answer = await p.createAnswer();
-                  await p.setLocalDescription(answer);
-                  await sendSignal('answer', answer);
-                  return;
-                }
-                if (msg.type === 'answer') {
-                  if (!isOfferer.current || p.signalingState !== 'have-local-offer') return;
-                  await applyRemoteDescription(p, msg.data);
-                  return;
-                }
-                if (msg.type === 'candidate') {
-                  if (remoteDescSet.current) {
-                    await p.addIceCandidate(new RTCIceCandidate(msg.data));
-                  } else {
-                    iceCandidateQueue.current.push(msg.data);
-                  }
-                  return;
-                }
-                if (msg.type === 'end') {
-                  if (isMounted.current) onEnd();
-                  return;
-                }
-              } catch (err: any) { log(`خطأ في الإشارة السلكية: ${err.message}`); }
-            })
-          .subscribe(status => {
-            if (status !== 'SUBSCRIBED' || !isMounted.current) return;
-            if (offerSent.current) return;
-
-            const shouldOffer = !!remoteUserId && userId < remoteUserId;
-            isOfferer.current = shouldOffer;
-
-            if (!shouldOffer) {
-              const POLL_INTERVAL = 1500;
-              const POLL_TIMEOUT  = 30000;
-              const pollStart     = Date.now();
-              const pollForOffer  = async () => {
-                if (!isMounted.current || remoteDescSet.current) return;
-                if (Date.now() - pollStart > POLL_TIMEOUT) return;
-                const p = peerRef.current;
-                if (!p || p.signalingState === 'closed') return;
-                try {
-                  const { data, error } = await supabase
-                    .from('signals').select('*')
-                    .eq('match_id', matchId).eq('type', 'offer').neq('sender', userId)
-                    .order('created_at', { ascending: false }).limit(1).single();
-                  if (error || !data) { setTimeout(pollForOffer, POLL_INTERVAL); return; }
-                  if (remoteDescSet.current || p.signalingState !== 'stable') return;
-                  await applyRemoteDescription(p, data.data);
-                  const answer = await p.createAnswer();
-                  await p.setLocalDescription(answer);
-                  await sendSignal('answer', answer);
-                  const { data: candidates } = await supabase
-                    .from('signals').select('*')
-                    .eq('match_id', matchId).eq('type', 'candidate').neq('sender', userId)
-                    .order('created_at', { ascending: true });
-                  if (candidates) {
-                    for (const row of candidates) {
-                      try { await peer.addIceCandidate(new RTCIceCandidate(row.data)); }
-                      catch (e) { console.warn(e); }
-                    }
-                  }
-                } catch (err: any) { setTimeout(pollForOffer, POLL_INTERVAL); }
-              };
-              pollForOffer();
-              return;
-            }
-
-            offerSent.current = true;
-            (async () => {
-              const p = peerRef.current;
-              if (!p || p.signalingState !== 'stable') return;
-              const offer = await p.createOffer();
-              await p.setLocalDescription(offer);
-              await sendSignal('offer', offer);
-            })();
-          });
-
-        sigChannelRef.current = sigChannel;
-
-        const chatChannel = supabase
-          .channel(`chat-${matchId}-${userId}-${Date.now()}`)
-          .on('postgres_changes',
-            { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` },
-            payload => {
-              if (isMounted.current) {
-                setMessages(prev => [...prev, payload.new as any]);
-                setNewMsg(true);
-              }
-            })
-          .subscribe();
-        chatChannelRef.current = chatChannel;
-
-      } catch (err: any) {
-        log(`خطأ حرج في تفعيل العتاد: ${err.message}`);
-        if (err.name === 'NotAllowedError')  setError('camera_denied');
-        else if (err.name === 'NotFoundError') setError('camera_not_found');
-        else setError('connection_failed');
+        if (reqError || !data?.token) throw new Error('Token failed');
+        if (isMounted) setToken(data.token);
+      } catch (err) {
+        if (isMounted) setError('connection_failed');
       }
     };
+    fetchToken();
+    return () => { isMounted = false; };
+  }, [matchId, userId]);
 
-    start();
-    return () => { isMounted.current = false; cleanupConnections(); };
-  }, [matchId, userId, remoteUserId, connected, playSFX, log, applyRemoteDescription, sendSignal, cleanupConnections, onEnd]);
-
-  const toggleMute = () => {
-    const track = streamRef.current?.getAudioTracks()[0];
-    if (track) { track.enabled = !track.enabled; setMuted(m => !m); }
-  };
-
-  const toggleCam = () => {
-    const track = streamRef.current?.getVideoTracks()[0];
-    if (track) { track.enabled = !track.enabled; setCamOff(c => !c); }
-  };
-
-  const sendMessage = async () => {
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
-    await supabase.from('messages').insert({ match_id: matchId, sender_id: userId, message: text });
-  };
-
-  const openChat = () => {
-    setShowChat(true);
-    setNewMsg(false);
-    setShowControls(true);
-    if (controlsTimer.current) clearTimeout(controlsTimer.current);
-  };
-
-  const closeChat = () => {
-    setShowChat(false);
-    resetControlsTimer();
-  };
-
-  // ── Error Screen Premium UI ──
+  // شاشة الخطأ الفخمة
   if (error) {
     const errorMessages: Record<NonNullable<ErrorType>, { icon: React.ReactNode; title: string; desc: string; showRetry: boolean; showEnd: boolean }> = {
-      camera_denied: {
-        icon: <VideoOffIcon />,
-        title: 'تم رفض صلاحية الكاميرا والميكروفون',
-        desc: 'يرجى تفعيل صلاحيات الوصول من شريط العناوين بالأعلى لتتمكن من بدء المحادثة والماتش الحقيقي.',
-        showRetry: false,
-        showEnd: true,
-      },
-      camera_not_found: {
-        icon: <VideoIcon />,
-        title: 'جهاز الكاميرا غير متاح',
-        desc: 'لم نتمكن من العثور على كاميرا نشطة متصلة بجهازك حالياً، تأكد من سلامة التوصيل.',
-        showRetry: true,
-        showEnd: true,
-      },
-      connection_timeout: {
-        icon: <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
-        title: 'انتهت مهلة البحث عن شريك',
-        desc: 'يبدو أن الطرف الآخر واجه مشكلة في الاستجابة السريعة، يرجى إعادة المحاولة من جديد.',
-        showRetry: true,
-        showEnd: true,
-      },
-      connection_failed: {
-        icon: <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" x2="12.01" y1="20" y2="20" strokeWidth="3" strokeLinecap="round"/></svg>,
-        title: 'خطأ في شبكة الاتصال الآمنة',
-        desc: 'فشل بروتوكول الـ WebRTC في إنشاء اتصال آمن ومباشر بسبب جدار الحماية لديك.',
-        showRetry: true,
-        showEnd: true,
-      },
+      camera_denied: { icon: <VideoOffIcon />, title: 'تم رفض صلاحية الكاميرا والميكروفون', desc: 'يرجى تفعيل صلاحيات الوصول من شريط العناوين بالأعلى لتتمكن من بدء المحادثة.', showRetry: false, showEnd: true },
+      camera_not_found: { icon: <VideoIcon />, title: 'جهاز الكاميرا غير متاح', desc: 'لم نتمكن من العثور على كاميرا نشطة متصلة بجهازك حالياً.', showRetry: true, showEnd: true },
+      connection_timeout: { icon: <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, title: 'انتهت مهلة البحث', desc: 'الطرف الآخر لم يستجب، يرجى المحاولة من جديد.', showRetry: true, showEnd: true },
+      connection_failed: { icon: <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" x2="12.01" y1="20" y2="20" strokeWidth="3" strokeLinecap="round"/></svg>, title: 'خطأ في شبكة الاتصال الآمنة', desc: 'فشل الاتصال بخوادم الفيديو المباشر، تأكد من جودة الإنترنت.', showRetry: true, showEnd: true },
     };
-
     const e = errorMessages[error];
     return (
       <div className="vc-premium-error-pane">
@@ -423,20 +79,144 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
     );
   }
 
+  if (!token) return null; // ننتظر حتى يأتي التوكن
+
+  return (
+    <LiveKitRoom
+      token={token}
+      serverUrl={import.meta.env.VITE_LIVEKIT_URL}
+      connect={true}
+      video={!camOff}
+      audio={!muted}
+      onError={() => setError('camera_denied')} // التقاط أخطاء الرفض
+    >
+      <CallUI 
+        userId={userId} matchId={matchId} remoteUserId={remoteUserId} 
+        onEnd={onEnd} onNext={onNext} 
+        muted={muted} setMuted={setMuted} camOff={camOff} setCamOff={setCamOff} 
+      />
+    </LiveKitRoom>
+  );
+}
+
+// ── واجهة المستخدم والمكونات التفاعلية الداخلية ──
+function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted, camOff, setCamOff }: Props & { muted: boolean, setMuted: any, camOff: boolean, setCamOff: any }) {
+  const [mirrored, setMirrored] = useState(true);
+  const [duration, setDuration] = useState(0);
+  const [messages, setMessages] = useState<{ id: string; sender_id: string; message: string }[]>([]);
+  const [input, setInput] = useState('');
+  const [showChat, setShowChat] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [newMsg, setNewMsg] = useState(false);
+  
+  const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const sfxRef = useRef<HTMLAudioElement | null>(null);
+
+  // استخدام هوك LiveKit لجلب حالة الاتصال الحقيقية بالسيرفر
+  const connectionState = useConnectionState();
+  const isConnected = connectionState === ConnectionState.Connected;
+
+  // جلب مسارات (Tracks) الفيديو المحلية والخارجية عبر LiveKit
+  const remoteTracks = useTracks([Track.Source.Camera]).filter(t => !t.participant.isLocal);
+  const localTracks = useTracks([Track.Source.Camera]).filter(t => t.participant.isLocal);
+
+  const playSFX = useCallback((src: string, loop = false) => {
+    if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; }
+    const audio = new Audio(src);
+    audio.loop = loop;
+    audio.volume = 0.4;
+    audio.play().catch(() => {});
+    sfxRef.current = audio;
+  }, []);
+
+  const stopSFX = useCallback(() => {
+    if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; }
+  }, []);
+
+  const resetControlsTimer = useCallback(() => {
+    setShowControls(true);
+    if (controlsTimer.current) clearTimeout(controlsTimer.current);
+    controlsTimer.current = setTimeout(() => {
+      if (!showChat) setShowControls(false);
+    }, 5000); 
+  }, [showChat]);
+
+  // إدارة الأصوات بناءً على حالة الاتصال
+  useEffect(() => {
+    if (!isConnected) playSFX(SFX_CONNECTING, true);
+    else stopSFX();
+    return () => stopSFX();
+  }, [isConnected, playSFX, stopSFX]);
+
+  // عداد المكالمة
+  useEffect(() => {
+    if (!isConnected) return;
+    const t = setInterval(() => setDuration(d => d + 1), 1000);
+    return () => clearInterval(t);
+  }, [isConnected]);
+
+  // Scroll للشات
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // إخفاء الكنترول بار تلقائياً
+  useEffect(() => {
+    resetControlsTimer();
+    return () => { if (controlsTimer.current) clearTimeout(controlsTimer.current); };
+  }, [resetControlsTimer]);
+
+  // مراقبة الشات واستقبال إشعارات المغادرة (End) عبر Supabase للحفاظ على الـ Database History
+  useEffect(() => {
+    const channelName = `vc-chat-sig-${matchId}`;
+    const channel = supabase.channel(channelName)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` }, payload => {
+        setMessages(prev => [...prev, payload.new as any]);
+        setNewMsg(true);
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` }, payload => {
+        const msg = payload.new as any;
+        if (msg.sender !== userId && msg.type === 'end') {
+          playSFX(SFX_END);
+          onEnd();
+        }
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [matchId, userId, onEnd, playSFX]);
+
+  // ── إجراءات الأزرار (Actions) ──
+  const triggerEndMatch = async (action: 'next' | 'end') => {
+    playSFX(SFX_END);
+    await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId);
+    await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId });
+    action === 'next' ? onNext() : onEnd();
+  };
+
+  const sendMessage = async () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    await supabase.from('messages').insert({ match_id: matchId, sender_id: userId, message: text });
+  };
+
+  const openChat = () => { setShowChat(true); setNewMsg(false); setShowControls(true); };
+  const closeChat = () => { setShowChat(false); resetControlsTimer(); };
+
   return (
     <div className="vc-app-container" onClick={resetControlsTimer}>
       <style>{STYLES}</style>
 
-      {/* الـ Video البعيد الأساسي خلفية الشاشة بالكامل */}
-      <video ref={remoteVideoRef} autoPlay playsInline className="vc-remote-stream-canvas" />
-
-      {/* حالة جاري البحث العائمة الفخمة */}
-      {!connected && (
+      {/* الـ Video البعيد الأساسي */}
+      {remoteTracks.length > 0 && remoteTracks[0].publication.track ? (
+        <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" />
+      ) : (
         <div className="vc-connecting-overlay">
           <div className="vc-radar-pulse" />
           <div className="vc-radar-pulse pulse-2" />
           <div className="vc-radar-pulse pulse-3" />
-          <span className="vc-connecting-headline">جاري البحث عن شريك بث...</span>
+          <span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span>
         </div>
       )}
 
@@ -445,12 +225,13 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
 
       {/* شاشة الـ PIP كاميرتك الشخصية */}
       <div className="vc-pip-container">
-        <video
-          ref={localVideoRef}
-          autoPlay playsInline muted
-          className="vc-pip-core-video"
-          style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }}
-        />
+        {localTracks.length > 0 && localTracks[0].publication.track ? (
+          <VideoTrack 
+            trackRef={localTracks[0]} 
+            className="vc-pip-core-video" 
+            style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} 
+          />
+        ) : null}
         {camOff && (
           <div className="vc-pip-camera-blind">
             <VideoOffIcon />
@@ -461,14 +242,14 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
       {/* التوب بار الذكي */}
       <div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}>
         <div className="vc-status-badge">
-          <span className={`vc-live-indicator-dot ${connected ? 'live' : 'searching'}`} />
-          <span className="vc-live-timer">{connected ? fmt(duration) : 'إشارة معلقة'}</span>
+          <span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} />
+          <span className="vc-live-timer">{isConnected ? fmt(duration) : 'إشارة معلقة'}</span>
         </div>
       </div>
 
       {/* نافذة الشات الانسيابية */}
       {showChat && (
-        <div className="vc-chat-super-window">
+        <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}>
           <div className="vc-chat-top-header">
             <span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span>
             <button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button>
@@ -496,13 +277,13 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
       )}
 
       {/* لوحة التحكم السفلية الاحترافية العائمة */}
-      <div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`}>
-        <button type="button" className={`vc-action-pill ${muted ? 'disabled' : ''}`} onClick={toggleMute}>
+      <div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}>
+        <button type="button" className={`vc-action-pill ${muted ? 'disabled' : ''}`} onClick={() => setMuted(!muted)}>
           <div className="vc-pill-icon-holder">{muted ? <MicOffIcon /> : <MicIcon />}</div>
           <span className="vc-pill-caption">{muted ? 'تشغيل' : 'كتم'}</span>
         </button>
 
-        <button type="button" className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onClick={toggleCam}>
+        <button type="button" className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onClick={() => setCamOff(!camOff)}>
           <div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div>
           <span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span>
         </button>
@@ -518,12 +299,12 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
           {newMsg && !showChat && <span className="vc-unread-badge-dot" />}
         </button>
 
-        <button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={handleNext}>
+        <button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}>
           <div className="vc-pill-icon-holder"><NextIcon /></div>
           <span className="vc-pill-caption">التالي</span>
         </button>
 
-        <button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={handleEnd}>
+        <button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}>
           <div className="vc-pill-icon-holder"><EndIcon /></div>
           <span className="vc-pill-caption">خروج</span>
         </button>
