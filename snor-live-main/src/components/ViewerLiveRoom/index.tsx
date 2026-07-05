@@ -344,18 +344,35 @@ export default function ViewerLiveRoom({
 
   const handleScreenTap = (e: React.MouseEvent) => { sendLike(e.clientX); };
 
+  // ⚡ تم التحديث: إضافة Optimistic UI لتجربة موبايل أسرع
   const handleToggleFollow = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!streamerId || streamerId === myUserId || followLoading) return;
+
+    const previousIsFollowing = isFollowing;
+
+    // تغيير حالة الزر فوراً لإعطاء المستخدم إحساس بالسرعة
+    setIsFollowing(!previousIsFollowing);
     setFollowLoading(true);
-    if (isFollowing) {
-      const { error } = await supabase.from('follows').delete().eq('follower_id', myUserId).eq('following_id', streamerId);
-      if (!error) setIsFollowing(false);
-    } else {
-      const { error } = await supabase.from('follows').insert([{ follower_id: myUserId, following_id: streamerId }]);
-      if (!error) { setIsFollowing(true); showToast(`تمت متابعة ${streamerName}`); }
+
+    try {
+      if (previousIsFollowing) {
+        // إلغاء المتابعة
+        const { error } = await supabase.from('follows').delete().eq('follower_id', myUserId).eq('following_id', streamerId);
+        if (error) throw error;
+      } else {
+        // متابعة جديدة
+        const { error } = await supabase.from('follows').insert([{ follower_id: myUserId, following_id: streamerId }]);
+        if (error) throw error;
+        showToast(`تمت متابعة ${streamerName}`);
+      }
+    } catch (error) {
+      // التراجع عن التغيير بصمت لو حدث خطأ في الاتصال
+      setIsFollowing(previousIsFollowing);
+      showToast('فشلت المتابعة، يرجى التأكد من اتصالك بالإنترنت');
+    } finally {
+      setFollowLoading(false);
     }
-    setFollowLoading(false);
   };
 
   const handleSendGift = async (gift: GiftDef) => {

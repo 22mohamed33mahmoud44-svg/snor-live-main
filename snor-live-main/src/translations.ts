@@ -89,6 +89,18 @@ export const translations = {
         support: { ar: 'الدعم',  en: 'Support'  },
       },
     },
+    completeProfile: {
+      title: 'أكمل بروفايلك 👤',
+      subtitle: 'خطوة واحدة وتبدأ',
+      upload: 'اضغط لرفع صورة',
+      usernamePlaceholder: 'الاسم',
+      genderMale: '👨 ذكر',
+      genderFemale: '👩 أنثى',
+      birthdateLabel: 'تاريخ الميلاد',
+      submit: 'ابدأ الآن 🚀',
+      submitting: 'جاري الحفظ...',
+      validationError: 'من فضلك اكمل كل البيانات',
+    },
   },
 
   en: {
@@ -175,6 +187,18 @@ export const translations = {
         company: { ar: 'الشركة', en: 'Company' },
         support: { ar: 'الدعم',  en: 'Support'  },
       },
+    },
+    completeProfile: {
+      title: 'Complete Your Profile 👤',
+      subtitle: 'Just one more step',
+      upload: 'Click to upload a picture',
+      usernamePlaceholder: 'Username',
+      genderMale: '👨 Male',
+      genderFemale: '👩 Female',
+      birthdateLabel: 'Birthdate',
+      submit: 'Start Now 🚀',
+      submitting: 'Saving...',
+      validationError: 'Please fill in all fields',
     },
   },
 } as const;

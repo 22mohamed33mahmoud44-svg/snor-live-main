@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, memo } from 'react';
 import { supabase } from './supabase';
 
 // ── Components ──────────────────────────────────────────────────
@@ -22,21 +22,19 @@ import { GLOBAL_CSS } from './constants/styles';
 
 // ── MAIN DASHBOARD ───────────────────────────────────────────────
 export default function Dashboard({ userId = 'me', onLogout = () => {} }: DashboardProps) {
+  // ⚡ تم نقل الحالات (States) الفرعية للمكونات الخاصة بها، وبقيت الحالات العامة فقط هنا
   const [tab, setTab] = useState<TabKey>('home');
-  const [category, setCategory] = useState<string>('all');
-  const [conversations, setConversations] = useState<ConvUser[]>([]);
   const [myProfile, setMyProfile] = useState<Profile>({ id: userId, full_name: 'مستخدم سنور', username: 'snor_user' });
+  
   const [openChat, setOpenChat] = useState<ChatOther | null>(null);
   const [activeCall, setActiveCall] = useState<CallState | null>(null);
   const [showRandomMatch, setShowRandomMatch] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [showBuyCoins, setShowBuyCoins] = useState(false);
-  const [matchGender, setMatchGender] = useState<string>('all');
-  const [autoConnect, setAutoConnect] = useState<boolean>(false);
+  const [totalUnread, setTotalUnread] = useState(0); // للعداد أسفل الشاشة
 
-  // 🆕 البث المباشر (تم إضافة streamId لحفظ رقم البث على السيرفر)
+  // 🆕 البث المباشر
   const [showLiveStudio, setShowLiveStudio] = useState(false);
   const [activeLiveStream, setActiveLiveStream] = useState<{ id: string, title: string; filterId: string; stream?: MediaStream | null } | null>(null);
 
@@ -47,21 +45,12 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     setActiveCall({ matchId: GeneratedMatchId, remoteUserId: remoteId, type });
   }, [userId]);
 
-  // 🚀 دالة إطلاق البث المطورة للربط بقاعدة البيانات
   const handleLaunchLiveStream = async (title: string, filterId: string, _intensity?: number, stream?: MediaStream | null) => {
-    // 1. تسجيل البث في Supabase عشان يظهر لكل المستخدمين في الرئيسية
     const { data, error } = await supabase
       .from('live_streams')
       .insert([
-        { 
-          user_id: userId, 
-          title: title || 'بث مباشر جديد', 
-          streamer_name: myProfile?.full_name || 'مستخدم سنور',
-          is_live: true 
-        }
-      ])
-      .select()
-      .single();
+        { user_id: userId, title: title || 'بث مباشر جديد', streamer_name: myProfile?.full_name || 'مستخدم سنور', is_live: true }
+      ]).select().single();
 
     if (error) {
       console.error("خطأ في تسجيل البث:", error);
@@ -69,71 +58,15 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       return;
     }
 
-    // 2. قفل الاستوديو وفتح غرفة البث الحقيقية بالـ ID الجديد
     setShowLiveStudio(false);
     setActiveLiveStream({ id: data.id, title, filterId, stream });
   };
 
-  // ── Data Fetching ─────────────────────────────────────────────
   useEffect(() => {
     supabase.from('profiles').select('*').eq('id', userId).single().then(({ data }) => {
       if (data) setMyProfile(data);
     });
   }, [userId]);
-
-  const fetchConversations = useCallback(async () => {
-    const { data: msgs, error } = await supabase
-      .from('messages')
-      .select('*')
-      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-      .order('created_at', { ascending: false });
-
-    if (error || !msgs) return;
-
-    const uniquePartnerIds = new Set<string>();
-    const lastMessagesMap = new Map<string, MsgItem>();
-
-    msgs.forEach((m) => {
-      const partnerId = m.sender_id === userId ? m.receiver_id : m.sender_id;
-      if (!uniquePartnerIds.has(partnerId)) {
-        uniquePartnerIds.add(partnerId);
-        lastMessagesMap.set(partnerId, m);
-      }
-    });
-
-    if (uniquePartnerIds.size === 0) { setConversations([]); return; }
-
-    const { data: profiles } = await supabase
-      .from('profiles')
-      .select('id, username, full_name, avatar_url, gender')
-      .in('id', Array.from(uniquePartnerIds));
-
-    if (profiles) {
-      const convList: ConvUser[] = profiles.map((p) => {
-        const lastMsgObj = lastMessagesMap.get(p.id);
-        return {
-          profile: p,
-          lastMessage: lastMsgObj?.message ?? '',
-          lastTime: lastMsgObj?.created_at ?? new Date().toISOString(),
-          unread: lastMsgObj?.sender_id !== userId && !lastMsgObj?.read ? 1 : 0,
-        };
-      });
-      setConversations(convList);
-    }
-  }, [userId]);
-
-  useEffect(() => {
-    fetchConversations();
-    const channel = supabase
-      .channel('dashboard-chats-tracker')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => {
-        fetchConversations();
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [fetchConversations]);
-
-  const totalUnread = conversations.reduce((s, c) => s + c.unread, 0);
 
   // ── Screen Router ─────────────────────────────────────────────
   if (activeCall) return <VideoCall userId={userId} matchId={activeCall.matchId} remoteUserId={activeCall.remoteUserId} onEnd={() => setActiveCall(null)} onNext={() => { setActiveCall(null); setShowRandomMatch(true); }} />;
@@ -143,23 +76,11 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   if (showEditProfile) return <EditProfileModal myProfile={myProfile} onClose={() => setShowEditProfile(false)} onProfileUpdated={(updated) => setMyProfile(updated)} />;
   if (showBuyCoins) return <BuyCoins onClose={() => setShowBuyCoins(false)} />;
   
-  // 🚀 الغرفة الحية للمذيع: تم إصلاح الخصائص وتمريرها بالكامل هنا لمنع الأخطاء
   if (activeLiveStream) {
     return (
-      <ActiveLiveRoom
-        streamId={activeLiveStream.id}
-        title={activeLiveStream.title} 
-        filterId={activeLiveStream.filterId} 
-        initialStream={activeLiveStream.stream}
-        myUserId={userId}
-        myUsername={myProfile?.full_name || "مستضيف البث"}
+      <ActiveLiveRoom streamId={activeLiveStream.id} title={activeLiveStream.title} filterId={activeLiveStream.filterId} initialStream={activeLiveStream.stream} myUserId={userId} myUsername={myProfile?.full_name || "مستضيف البث"}
         onEndStream={async () => {
-          // إنهاء البث من الداتا بيس
-          await supabase
-            .from('live_streams')
-            .update({ is_live: false })
-            .eq('id', activeLiveStream.id);
-            
+          await supabase.from('live_streams').update({ is_live: false }).eq('id', activeLiveStream.id);
           setActiveLiveStream(null);
         }} 
       />
@@ -183,149 +104,20 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
             <GearIcon />
           </button>
           <div onClick={() => setTab('profile')} className={`header-avatar-btn ${tab === 'profile' ? 'active-border' : ''}`} title="حسابي">
-            {myProfile?.avatar_url
-              ? <img src={myProfile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              : initials(myProfile)
-            }
+            {myProfile?.avatar_url ? <img src={myProfile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials(myProfile)}
           </div>
         </div>
       </div>
 
       {/* ── Tab Content ── */}
       <div className="dashboard-content">
-
-        {/* HOME TAB */}
-        {tab === 'home' && (
-          <div className="tab-fadein" style={{ padding: '16px 20px' }}>
-            <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: '14px', marginBottom: '8px' }}>
-              {[
-                { key: 'all', label: '🔥 الكل' },
-                { key: 'hd', label: '🎥 كاميرا HD' },
-                { key: 'global', label: '🌍 دولي' }
-              ].map(cat => (
-                <button key={cat.key} onClick={() => setCategory(cat.key)} className={`category-badge ${category === cat.key ? 'active' : ''}`}>
-                  {cat.label}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>بث مباشر الآن 🔥</h3>
-            </div>
-            {/* تم إزالة الدالة المسببة للخطأ لأن الـ Grid يفتح البث داخلياً */}
-            <LiveStreamGrid />
-          </div>
-        )}
-
-        {/* MATCH TAB */}
-        {tab === 'match' && (
-          <div className="tab-fadein match-centered-container">
-            <div className="gender-selector-bar">
-              {[
-                { key: 'all', label: '🌍 الكل' },
-                { key: 'female', label: '👩 إناث' },
-                { key: 'male', label: '👨 ذكور' }
-              ].map(g => (
-                <button key={g.key} onClick={() => setMatchGender(g.key)} className={`gender-btn ${matchGender === g.key ? 'active' : ''}`}>
-                  {g.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="radar-glow-container">
-              <div className="pulse-ring ring-1" />
-              <div className="pulse-ring ring-2" />
-              <div className="pulse-ring ring-3" />
-              <button type="button" onClick={() => setShowRandomMatch(true)} className="btn-match-giant">
-                <div className="inner-glow-circle">
-                  <VideoIcon size={36} />
-                  <span style={{ fontSize: '1.05rem', fontWeight: 800, marginTop: 10 }}>ابدأ المطابقة</span>
-                </div>
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, background: 'rgba(255,255,255,0.02)', padding: '10px 16px', borderRadius: 16, border: '1px solid rgba(255,255,255,0.04)' }}>
-              <span style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.6)' }}>تخطي تلقائي للمخدم التالي</span>
-              <input type="checkbox" checked={autoConnect} onChange={() => setAutoConnect(!autoConnect)} className="ios-switch" />
-            </div>
-          </div>
-        )}
-
-        {/* CHATS TAB */}
-        {tab === 'chats' && (
-          <div className="tab-fadein" style={{ padding: '16px 0' }}>
-            <div style={{ padding: '0 16px 16px' }}>
-              <div className="search-box">
-                <SearchIcon />
-                <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="ابحث في محادثاتك الخاصة..." />
-              </div>
-            </div>
-            <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {conversations.length === 0 && (
-                <div style={{ textAlign: 'center', padding: '80px 20px', color: 'rgba(255,255,255,.2)' }}>
-                  <div style={{ fontSize: '3rem', marginBottom: 12 }}>💬</div>
-                  صندوق الرسائل فارغ حالياً.
-                </div>
-              )}
-              {conversations
-                .filter(c => !searchQuery || (c.profile.full_name || '').includes(searchQuery) || (c.profile.username || '').includes(searchQuery))
-                .map((conv) => (
-                  <div key={conv.profile.id} onClick={() => setOpenChat(conv.profile)} className="chat-row-card" style={{ borderLeft: conv.unread ? '3px solid #00d4ff' : '1px solid rgba(255,255,255,0.04)' }}>
-                    <div style={{ width: 46, height: 46, borderRadius: 14, background: 'linear-gradient(135deg,#7c3aed,#00d4ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: '#fff', overflow: 'hidden', flexShrink: 0 }}>
-                      {conv.profile.avatar_url
-                        ? <img src={conv.profile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        : initials(conv.profile)
-                      }
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff', marginBottom: 4 }}>{conv.profile.full_name || conv.profile.username || 'مستخدم'}</div>
-                      <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{conv.lastMessage}</div>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                      <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.25)' }}>{timeAgo(conv.lastTime)}</span>
-                      {conv.unread > 0 && <span className="unread-badge-counter">جديد</span>}
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-        )}
-
-        {/* PROFILE TAB */}
-        {tab === 'profile' && (
-          <div className="tab-fadein">
-            <div style={{ position: 'relative', marginBottom: 64 }}>
-              <div className="profile-banner" />
-              <div className="profile-avatar-outer">
-                <div className="avatar-core">
-                  {myProfile?.avatar_url
-                    ? <img src={myProfile.avatar_url} alt="" />
-                    : <span style={{ fontSize: '2.2rem', fontWeight: 800 }}>{initials(myProfile)}</span>
-                  }
-                </div>
-              </div>
-            </div>
-            <div style={{ textAlign: 'center', padding: '0 20px' }}>
-              <h2 style={{ fontSize: '1.4rem', fontWeight: 700 }}>{myProfile?.full_name || 'عضو سنور'}</h2>
-              <div style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,.4)', marginTop: 4 }}>@{myProfile?.username}</div>
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14 }}>
-                <span className="profile-tag">ذكر 👨</span>
-                <span className="profile-tag active"><div className="dot" />حساب موثق</span>
-              </div>
-            </div>
-            <div className="profile-stats-grid">
-              <div><div className="val">2,450</div><div className="lbl">دقيقة بث</div></div>
-              <div className="line" />
-              <div><div className="val">540</div><div className="lbl">شاهدوا ملفك</div></div>
-            </div>
-            <div style={{ padding: '0 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <button type="button" onClick={() => setShowSettings(true)} className="profile-btn primary"><GearIcon /> إعدادات الحساب والمظهر</button>
-              <button type="button" onClick={onLogout} className="profile-btn danger"><LogoutIcon /> تسجيل الخروج من التطبيق</button>
-            </div>
-          </div>
-        )}
+        {tab === 'home' && <HomeTab />}
+        {tab === 'match' && <MatchTab onStartRandomMatch={() => setShowRandomMatch(true)} />}
+        {tab === 'chats' && <ChatsTab userId={userId} onOpenChat={setOpenChat} onUnreadUpdate={setTotalUnread} />}
+        {tab === 'profile' && <ProfileTab myProfile={myProfile} onLogout={onLogout} onOpenSettings={() => setShowSettings(true)} />}
       </div>
 
-      {/* ── FAB: زر البث العائم ── */}
+      {/* ── FAB ── */}
       {tab === 'home' && (
         <button type="button" onClick={() => setShowLiveStudio(true)} className="fab-live-trigger-fixed" title="ابدأ بث مباشر الآن">
           <VideoIcon size={22} />
@@ -352,3 +144,174 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     </div>
   );
 }
+
+
+// ─────────────────────────────────────────────────────────────────
+// 🚀 المكونات المعزولة (لضمان السلاسة ومنع الـ Re-render الشامل)
+// ─────────────────────────────────────────────────────────────────
+
+const HomeTab = memo(() => {
+  const [category, setCategory] = useState<string>('all');
+  return (
+    <div className="tab-fadein" style={{ padding: '16px 20px' }}>
+      <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: '14px', marginBottom: '8px' }}>
+        {[
+          { key: 'all', label: '🔥 الكل' },
+          { key: 'hd', label: '🎥 كاميرا HD' },
+          { key: 'global', label: '🌍 دولي' }
+        ].map(cat => (
+          <button key={cat.key} onClick={() => setCategory(cat.key)} className={`category-badge ${category === cat.key ? 'active' : ''}`}>
+            {cat.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+        <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>بث مباشر الآن 🔥</h3>
+      </div>
+      <LiveStreamGrid />
+    </div>
+  );
+});
+
+const MatchTab = memo(({ onStartRandomMatch }: { onStartRandomMatch: () => void }) => {
+  const [matchGender, setMatchGender] = useState<string>('all');
+  const [autoConnect, setAutoConnect] = useState<boolean>(false);
+  return (
+    <div className="tab-fadein match-centered-container">
+      <div className="gender-selector-bar">
+        {[
+          { key: 'all', label: '🌍 الكل' },
+          { key: 'female', label: '👩 إناث' },
+          { key: 'male', label: '👨 ذكور' }
+        ].map(g => (
+          <button key={g.key} onClick={() => setMatchGender(g.key)} className={`gender-btn ${matchGender === g.key ? 'active' : ''}`}>
+            {g.label}
+          </button>
+        ))}
+      </div>
+      <div className="radar-glow-container">
+        <div className="pulse-ring ring-1" />
+        <div className="pulse-ring ring-2" />
+        <div className="pulse-ring ring-3" />
+        <button type="button" onClick={onStartRandomMatch} className="btn-match-giant">
+          <div className="inner-glow-circle">
+            <VideoIcon size={36} />
+            <span style={{ fontSize: '1.05rem', fontWeight: 800, marginTop: 10 }}>ابدأ المطابقة</span>
+          </div>
+        </button>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, background: 'rgba(255,255,255,0.02)', padding: '10px 16px', borderRadius: 16, border: '1px solid rgba(255,255,255,0.04)' }}>
+        <span style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.6)' }}>تخطي تلقائي للمخدم التالي</span>
+        <input type="checkbox" checked={autoConnect} onChange={() => setAutoConnect(!autoConnect)} className="ios-switch" />
+      </div>
+    </div>
+  );
+});
+
+const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string, onOpenChat: (p: any) => void, onUnreadUpdate: (u: number) => void }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [conversations, setConversations] = useState<ConvUser[]>([]);
+
+  // 🚀 السحب الخارق للأداء باستخدام الدالة (RPC) الجديدة
+  const fetchConversations = useCallback(async () => {
+    const { data: convStats, error } = await supabase.rpc('get_user_conversations', { p_user_id: userId });
+
+    if (error || !convStats || convStats.length === 0) {
+      setConversations([]);
+      onUnreadUpdate(0);
+      return;
+    }
+
+    const partnerIds = convStats.map((c: any) => c.partner_id);
+    const { data: profiles } = await supabase.from('profiles').select('id, username, full_name, avatar_url, gender').in('id', partnerIds);
+
+    if (profiles) {
+      const convList: ConvUser[] = profiles.map(p => {
+        const stat = convStats.find((s: any) => s.partner_id === p.id);
+        return {
+          profile: p,
+          lastMessage: stat.last_message,
+          lastTime: stat.last_time,
+          unread: Number(stat.unread_count || 0)
+        };
+      }).sort((a, b) => new Date(b.lastTime).getTime() - new Date(a.lastTime).getTime());
+
+      setConversations(convList);
+      onUnreadUpdate(convList.reduce((acc, c) => acc + c.unread, 0));
+    }
+  }, [userId, onUnreadUpdate]);
+
+  useEffect(() => {
+    fetchConversations();
+    const channel = supabase.channel('dashboard-chats-tracker')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, fetchConversations)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchConversations]);
+
+  const filteredConvs = conversations.filter(c => !searchQuery || (c.profile.full_name || '').includes(searchQuery) || (c.profile.username || '').includes(searchQuery));
+
+  return (
+    <div className="tab-fadein" style={{ padding: '16px 0' }}>
+      <div style={{ padding: '0 16px 16px' }}>
+        <div className="search-box">
+          <SearchIcon />
+          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="ابحث في محادثاتك الخاصة..." />
+        </div>
+      </div>
+      <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {conversations.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '80px 20px', color: 'rgba(255,255,255,.2)' }}>
+            <div style={{ fontSize: '3rem', marginBottom: 12 }}>💬</div>
+            صندوق الرسائل فارغ حالياً.
+          </div>
+        )}
+        {filteredConvs.map((conv) => (
+          <div key={conv.profile.id} onClick={() => onOpenChat(conv.profile)} className="chat-row-card" style={{ borderLeft: conv.unread ? '3px solid #00d4ff' : '1px solid rgba(255,255,255,0.04)' }}>
+            <div style={{ width: 46, height: 46, borderRadius: 14, background: 'linear-gradient(135deg,#7c3aed,#00d4ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: '#fff', overflow: 'hidden', flexShrink: 0 }}>
+              {conv.profile.avatar_url ? <img src={conv.profile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials(conv.profile)}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff', marginBottom: 4 }}>{conv.profile.full_name || conv.profile.username || 'مستخدم'}</div>
+              <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{conv.lastMessage}</div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+              <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.25)' }}>{timeAgo(conv.lastTime)}</span>
+              {conv.unread > 0 && <span className="unread-badge-counter">جديد</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+const ProfileTab = memo(({ myProfile, onLogout, onOpenSettings }: { myProfile: Profile, onLogout: () => void, onOpenSettings: () => void }) => (
+  <div className="tab-fadein">
+    <div style={{ position: 'relative', marginBottom: 64 }}>
+      <div className="profile-banner" />
+      <div className="profile-avatar-outer">
+        <div className="avatar-core">
+          {myProfile?.avatar_url ? <img src={myProfile.avatar_url} alt="" /> : <span style={{ fontSize: '2.2rem', fontWeight: 800 }}>{initials(myProfile)}</span>}
+        </div>
+      </div>
+    </div>
+    <div style={{ textAlign: 'center', padding: '0 20px' }}>
+      <h2 style={{ fontSize: '1.4rem', fontWeight: 700 }}>{myProfile?.full_name || 'عضو سنور'}</h2>
+      <div style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,.4)', marginTop: 4 }}>@{myProfile?.username}</div>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14 }}>
+        <span className="profile-tag">ذكر 👨</span>
+        <span className="profile-tag active"><div className="dot" />حساب موثق</span>
+      </div>
+    </div>
+    <div className="profile-stats-grid">
+      <div><div className="val">2,450</div><div className="lbl">دقيقة بث</div></div>
+      <div className="line" />
+      <div><div className="val">540</div><div className="lbl">شاهدوا ملفك</div></div>
+    </div>
+    <div style={{ padding: '0 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <button type="button" onClick={onOpenSettings} className="profile-btn primary"><GearIcon /> إعدادات الحساب والمظهر</button>
+      <button type="button" onClick={onLogout} className="profile-btn danger"><LogoutIcon /> تسجيل الخروج من التطبيق</button>
+    </div>
+  </div>
+));

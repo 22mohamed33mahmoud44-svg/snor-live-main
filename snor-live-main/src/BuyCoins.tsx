@@ -7,7 +7,7 @@ const PACKAGES = [
   { id: "pkg_1000", coins: 1000, price: 80, label: "أفضل قيمة", emoji: "👑", color: "#10b981", popular: false },
 ];
 
-type Step = "select" | "loading" | "error";
+type Step = "select" | "loading" | "error" | "success";
 
 // ✅ دالة مساعدة تنتظر الـ script يتحمل
 function loadXsollaScript(): Promise<void> {
@@ -34,10 +34,32 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
   const [selectedPkg, setSelectedPkg] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("select");
   const [errorMsg, setErrorMsg] = useState("");
+  const [userId, setUserId] = useState<string | null>(null);
 
+  // جلب الـ ID الخاص بالمستخدم الحالي
   useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setUserId(data.user?.id || null));
     loadXsollaScript();
   }, []);
+
+  // 🛡️ المراقبة اللحظية للرصيد (لإظهار شاشة النجاح فور إضافة السيرفر للكوينز)
+  useEffect(() => {
+    if (!userId) return;
+
+    const subscription = supabase
+      .channel('coins-update')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'users_coins', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          console.log("تم رصد تحديث في الرصيد!", payload);
+          setStep("success"); // تحويل الواجهة لـ "تمت العملية" فوراً
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(subscription); };
+  }, [userId]);
 
   const handleBuy = async () => {
     if (!selectedPkg) return;
@@ -60,7 +82,11 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
       const XPayStationWidget = (window as any).XPayStationWidget;
 
       if (XPayStationWidget) {
-        // ✅ تعديل: أضفنا إعدادات الـ lightbox لإجبارها على أخذ كامل مساحة الشاشة بشكل متجاوب
+        // ✅ إغلاق الـ Widget يعيدنا لشاشة الاختيار
+        XPayStationWidget.on('close', () => {
+             if (step !== 'success') setStep("select");
+        });
+
         XPayStationWidget.init({
           access_token: data.token,
           sandbox: true,
@@ -70,7 +96,6 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
             zIndex: 999999,
           },
         });
-        setStep("select");
         XPayStationWidget.open();
       } else {
         // خطة بديلة لو الـ widget مش شغال
@@ -97,34 +122,45 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
         <button onClick={onClose} className="bc-close-btn">✕</button>
       )}
 
-      <div style={{ textAlign: "center", marginBottom: 40, marginTop: onClose ? 20 : 0 }}>
-        <div style={{ fontSize: 52, filter: "drop-shadow(0 4px 15px rgba(255,215,0,0.3))", animation: "bc-float 3s ease-in-out infinite" }}>🪙</div>
-        <h1 style={{ fontSize: 26, fontWeight: 800, margin: "12px 0 0", background: "linear-gradient(135deg,#fff,#a78bfa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>متجر الكوينز الرقمي</h1>
-        <p style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.9rem", marginTop: 4 }}>اشحن رصيدك فوراً بدعم المحافظ الإلكترونية المصرية وفوري</p>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 16, maxWidth: 540, margin: "0 auto 40px" }}>
-        {PACKAGES.map(p => (
-          <div key={p.id} onClick={() => setSelectedPkg(p.id)} className={`bc-pkg-card ${selectedPkg === p.id ? 'active' : ''}`} style={{ '--pkg-color': p.color } as React.CSSProperties}>
-            {p.popular && <div className="bc-popular-badge">الأكثر طلباً 🔥</div>}
-            <div className="bc-pkg-emoji">{p.emoji}</div>
-            <div className="bc-pkg-coins">{p.coins.toLocaleString()}</div>
-            <div className="bc-pkg-lbl">كوينز</div>
-            <div className="bc-pkg-price">{p.price} جنيه</div>
-          </div>
-        ))}
-      </div>
-
-      {selectedPkg && (
-        <div className="bc-form-container" style={{ textAlign: 'center' }}>
-          <p style={{ fontSize: "0.95rem", color: "rgba(255,255,255,0.7)", marginBottom: 16 }}>
-            لقد اخترت باقة <strong style={{ color: pkg?.color }}>{pkg?.coins} كوينز</strong> بمبلغ {pkg?.price} جنيه مصري.
-          </p>
-          {errorMsg && <p className="bc-error-text">{errorMsg}</p>}
-          <button onClick={handleBuy} className="bc-submit-btn">
-            الانتقال لخيارات الدفع الآمنة 🚀
-          </button>
+      {step === "success" ? (
+        <div className="bc-loading-overlay" style={{ background: "rgba(5,5,10,0.95)" }}>
+          <div style={{ fontSize: 60, marginBottom: 16 }}>🎉</div>
+          <h2 style={{ color: "#10b981", fontSize: 24, fontWeight: 800 }}>تم الشحن بنجاح!</h2>
+          <p style={{ color: "rgba(255,255,255,0.6)", marginTop: 8 }}>تمت إضافة الكوينز إلى محفظتك.</p>
+          <button onClick={onClose} className="bc-submit-btn" style={{ maxWidth: 200, marginTop: 24 }}>العودة للتطبيق</button>
         </div>
+      ) : (
+        <>
+          <div style={{ textAlign: "center", marginBottom: 40, marginTop: onClose ? 20 : 0 }}>
+            <div style={{ fontSize: 52, filter: "drop-shadow(0 4px 15px rgba(255,215,0,0.3))", animation: "bc-float 3s ease-in-out infinite" }}>🪙</div>
+            <h1 style={{ fontSize: 26, fontWeight: 800, margin: "12px 0 0", background: "linear-gradient(135deg,#fff,#a78bfa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>متجر الكوينز الرقمي</h1>
+            <p style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.9rem", marginTop: 4 }}>اشحن رصيدك فوراً بدعم المحافظ الإلكترونية المصرية وفوري</p>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 16, maxWidth: 540, margin: "0 auto 40px" }}>
+            {PACKAGES.map(p => (
+              <div key={p.id} onClick={() => setSelectedPkg(p.id)} className={`bc-pkg-card ${selectedPkg === p.id ? 'active' : ''}`} style={{ '--pkg-color': p.color } as React.CSSProperties}>
+                {p.popular && <div className="bc-popular-badge">الأكثر طلباً 🔥</div>}
+                <div className="bc-pkg-emoji">{p.emoji}</div>
+                <div className="bc-pkg-coins">{p.coins.toLocaleString()}</div>
+                <div className="bc-pkg-lbl">كوينز</div>
+                <div className="bc-pkg-price">{p.price} جنيه</div>
+              </div>
+            ))}
+          </div>
+
+          {selectedPkg && (
+            <div className="bc-form-container" style={{ textAlign: 'center' }}>
+              <p style={{ fontSize: "0.95rem", color: "rgba(255,255,255,0.7)", marginBottom: 16 }}>
+                لقد اخترت باقة <strong style={{ color: pkg?.color }}>{pkg?.coins} كوينز</strong> بمبلغ {pkg?.price} جنيه مصري.
+              </p>
+              {errorMsg && <p className="bc-error-text">{errorMsg}</p>}
+              <button onClick={handleBuy} className="bc-submit-btn">
+                الانتقال لخيارات الدفع الآمنة 🚀
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {step === "loading" && (
@@ -149,7 +185,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
 const STYLES = `
   @keyframes bc-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
   @keyframes bc-spin { to { transform: rotate(360deg); } }
-  .bc-close-btn { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); width: 36px; height: 36px; border-radius: 50%; font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+  .bc-close-btn { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); width: 36px; height: 36px; border-radius: 50%; font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; z-index: 100; }
   .bc-close-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
   .bc-pkg-card { position: relative; border: 1.5px solid rgba(255,255,255,0.06); border-radius: 22px; padding: 24px 14px; text-align: center; cursor: pointer; background: rgba(255,255,255,0.02); backdrop-filter: blur(10px); transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
   .bc-pkg-card:hover { transform: translateY(-4px); border-color: var(--pkg-color); background: rgba(255,255,255,0.04); }
