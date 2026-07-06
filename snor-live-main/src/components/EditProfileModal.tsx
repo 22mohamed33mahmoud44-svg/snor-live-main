@@ -30,12 +30,12 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
 
       const file = e.target.files[0];
       const fileExt = file.name.split('.').pop();
-      // 💡 تحسين: استخدام مسار ثابت لكل مستخدم لمنع تراكم الصور القديمة
+      // تثبيت اسم الملف لعدم تراكم الصور في السيرفر
       const filePath = `avatars/${myProfile?.id}.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(filePath, file, { upsert: true }); // upsert: true يقوم باستبدال الملف القديم
+        .upload(filePath, file, { upsert: true });
 
       if (uploadError) throw uploadError;
 
@@ -43,9 +43,10 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
         .from('avatars')
         .getPublicUrl(filePath);
 
-      setAvatarUrl(publicUrl);
+      // 🚀 إضافة Cache-Buster لإجبار الواجهة على تحديث الصورة فوراً
+      setAvatarUrl(`${publicUrl}?t=${Date.now()}`);
     } catch (err: any) {
-      setErrorMsg(err.message || 'فشل في رفع الصورة، تأكد من الصلاحيات.');
+      setErrorMsg(err.message || 'فشل في رفع الصورة، تأكد من الصلاحيات وحجم الملف.');
     } finally {
       setUploading(false);
     }
@@ -61,10 +62,16 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
       setErrorMsg('');
       setSaving(true);
 
+      // 🛡️ تنظيف الـ Username من أي مسافات أو رموز غير مسموحة
+      const sanitizedUsername = username
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_]/g, '');
+
       const updatedData = {
         id: myProfile?.id,
         full_name: fullName,
-        username: username.toLowerCase().replace(/\s+/g, '_'),
+        username: sanitizedUsername,
         gender,
         avatar_url: avatarUrl,
         updated_at: new Date().toISOString(),
@@ -79,7 +86,7 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
       onProfileUpdated(updatedData);
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || 'حدث خطأ أثناء حفظ البيانات.');
+      setErrorMsg(err.message || 'حدث خطأ أثناء حفظ البيانات، تأكد من اتصالك بالإنترنت.');
     } finally {
       setSaving(false);
     }
@@ -114,12 +121,24 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 28 }}>
           <div style={inputGroupStyle}>
             <label style={labelStyle}>الاسم بالكامل</label>
-            <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="مثال: محمد محمود" style={inputStyle} />
+            <input 
+              type="text" 
+              value={fullName} 
+              onChange={e => setFullName(e.target.value)} 
+              placeholder="مثال: محمد محمود فضل عبده" 
+              style={inputStyle} 
+            />
           </div>
 
           <div style={inputGroupStyle}>
             <label style={labelStyle}>اسم المستخدم (Username)</label>
-            <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="مثال: mohamed_fadel" style={inputStyle} />
+            <input 
+              type="text" 
+              value={username} 
+              onChange={e => setUsername(e.target.value)} 
+              placeholder="مثال: mohamed_fadel" 
+              style={inputStyle} 
+            />
           </div>
 
           <div style={inputGroupStyle}>
@@ -142,7 +161,7 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
   );
 }
 
-// ── PREMIUM INLINE STYLES (تم تصليح الأخطاء بالكامل هنا) ──
+// ── PREMIUM INLINE STYLES ──
 const modalOverlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(5,5,10,0.8)', zIndex: 950, backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, direction: 'rtl', color: '#fff' };
 const modalContainerStyle: React.CSSProperties = { width: '100%', maxWidth: 420, background: '#0a0a16', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 24, padding: 24, boxShadow: '0 20px 40px rgba(0,0,0,0.5)' };
 const closeBtnStyle: React.CSSProperties = { width: 32, height: 32, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };

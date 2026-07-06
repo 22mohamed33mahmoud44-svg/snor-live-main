@@ -188,11 +188,24 @@ export default function LiveStreamGrid() {
     );
   }
 
+  // 💎 Skeleton Loaders: مربعات تحميل نبضية احترافية
   if (loading) {
     return (
-      <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 gap-4 p-2">
+      <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 gap-5 p-2">
         {[1, 2, 3, 4, 5, 6].map((n) => (
-          <div key={n} className="animate-pulse aspect-[9/16] rounded-3xl bg-[#0a0a16] border border-[#1a1a2e]/50" />
+          <div key={n} className="relative aspect-[9/16] w-full rounded-3xl bg-[#0a0a16] border border-[#1a1a2e] overflow-hidden">
+            <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-[#11111d] to-[#0a0a16]" />
+            {/* مكان الأفاتار */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+               <div className="w-20 h-20 rounded-full bg-[#1a1a2e] animate-pulse shadow-inner" />
+            </div>
+            {/* مكان النصوص في الأسفل */}
+            <div className="absolute bottom-4 w-full px-4 flex flex-col gap-2">
+              <div className="h-4 w-3/4 bg-[#1a1a2e] rounded-lg animate-pulse" />
+              <div className="h-5 w-1/2 bg-[#1a1a2e] rounded-lg animate-pulse" />
+              <div className="h-3 w-full bg-[#1a1a2e] rounded-lg animate-pulse mt-2 opacity-50" />
+            </div>
+          </div>
         ))}
       </div>
     );
@@ -200,12 +213,12 @@ export default function LiveStreamGrid() {
 
   if (streams.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center p-10 text-center bg-white/5 rounded-3xl border border-white/10 mx-2 mt-4">
-        <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mb-4">
+      <div className="flex flex-col items-center justify-center p-10 text-center bg-white/5 rounded-3xl border border-white/10 mx-2 mt-4 shadow-lg">
+        <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mb-4 border border-white/5">
           <Tv className="w-8 h-8 text-white/30" />
         </div>
-        <h4 className="text-white font-bold mb-1">لا يوجد بثوث مباشرة الآن</h4>
-        <p className="text-white/40 text-sm">كُن أول من يبدأ البث المباشر!</p>
+        <h4 className="text-white font-bold mb-1">لا توجد بثوث مباشرة الآن</h4>
+        <p className="text-white/40 text-sm">كُن أول من يبدأ البث المباشر وأبهر الجميع!</p>
       </div>
     );
   }

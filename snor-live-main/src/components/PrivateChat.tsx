@@ -1,10 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { supabase } from '../supabase';
 import type { ChatOther, MsgItem } from '../types';
 import { timeAgo } from '../utils/helpers';
 import { PhoneIcon, VideoIcon, BackIcon, SendIcon } from './icons/Icons';
 
-// ── Private Chat Component ───────────────────────────────────────
 interface PrivateChatProps {
   myId: string;
   other: ChatOther;
@@ -12,60 +11,157 @@ interface PrivateChatProps {
   onStartCall: (id: string, type: 'video' | 'audio') => void;
 }
 
+// ── رسالة منفصلة لضمان الأداء وعدم إعادة تحميل كل المحادثة ──
+const MessageBubble = memo(({ msg, isMe, showTime }: { msg: MsgItem & { isOptimistic?: boolean }, isMe: boolean, showTime: boolean }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-start' : 'flex-end', opacity: msg.isOptimistic ? 0.7 : 1, transition: 'opacity 0.2s' }}>
+    <div style={{
+      maxWidth: '80%', padding: '10px 16px', borderRadius: 20, fontSize: '0.9rem',
+      lineHeight: 1.5, wordBreak: 'break-word',
+      background: isMe ? 'linear-gradient(135deg,#7c3aed,#00d4ff)' : 'rgba(255,255,255,.05)',
+      border: isMe ? 'none' : '1px solid rgba(255,255,255,.05)',
+      borderBottomRightRadius: isMe ? 4 : 20,
+      borderBottomLeftRadius: isMe ? 20 : 4,
+      boxShadow: isMe ? '0 4px 15px rgba(0,212,255,0.2)' : 'none',
+    }}>
+      {msg.message}
+    </div>
+    {showTime && (
+      <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,.4)', padding: '4px 6px', display: 'flex', alignItems: 'center', gap: 4 }}>
+        {timeAgo(msg.created_at)}
+        {isMe && !msg.isOptimistic && <span style={{ color: msg.read ? '#34d399' : '#94a3b8' }}>{msg.read ? '✓✓' : '✓'}</span>}
+      </div>
+    )}
+  </div>
+));
+
 export default function PrivateChat({ myId, other, onBack, onStartCall }: PrivateChatProps) {
-  const [messages, setMessages] = useState<MsgItem[]>([]);
+  const [messages, setMessages] = useState<(MsgItem & { isOptimistic?: boolean })[]>([]);
   const [input, setInput] = useState('');
+  const [isOtherOnline, setIsOtherOnline] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
   const name = other.full_name || other.username || other.name || 'مستخدم';
 
+  const scrollToBottom = (force = false) => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    // التمرير التلقائي فقط إذا كان المستخدم قريباً من أسفل الشاشة أو تم إجباره (عند إرسال رسالة)
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
+    
+    if (force || isNearBottom) {
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    }
+  };
+
   useEffect(() => {
-    const fetchMessages = async () => {
+    // 1. جلب الرسائل السابقة وتحديث حالتها إلى "مقروءة"
+    const fetchAndReadMessages = async () => {
       const { data } = await supabase
         .from('messages')
         .select('*')
         .or(`and(sender_id.eq.${myId},receiver_id.eq.${other.id}),and(sender_id.eq.${other.id},receiver_id.eq.${myId})`)
-        .order('created_at', { ascending: true });
-      if (data) setMessages(data);
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+        .order('created_at', { ascending: true })
+        .limit(100); // 🚀 جلب آخر 100 رسالة فقط لتسريع التحميل
+
+      if (data) {
+        setMessages(data);
+        scrollToBottom(true);
+        
+        // تحديث رسائل الطرف الآخر غير المقروءة لتصبح مقروءة
+        const unreadIds = data.filter(m => m.receiver_id === myId && !m.read).map(m => m.id);
+        if (unreadIds.length > 0) {
+          await supabase.from('messages').update({ read: true }).in('id', unreadIds);
+        }
+      }
     };
 
-    fetchMessages();
+    fetchAndReadMessages();
 
-    const channel = supabase
-      .channel(`private-chat-${other.id}`)
+    // 2. إعداد قناة الاتصال اللحظي للرسائل والـ Presence
+    const channelId = myId < other.id ? `chat-${myId}-${other.id}` : `chat-${other.id}-${myId}`;
+    const channel = supabase.channel(channelId, { config: { presence: { key: myId } } });
+
+    channel
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
         const newMsg = payload.new as MsgItem;
-        if (
-          (newMsg.sender_id === myId && newMsg.receiver_id === other.id) ||
-          (newMsg.sender_id === other.id && newMsg.receiver_id === myId)
-        ) {
-          setMessages(prev => [...prev, newMsg]);
-          setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+        if ((newMsg.sender_id === myId && newMsg.receiver_id === other.id) || (newMsg.sender_id === other.id && newMsg.receiver_id === myId)) {
+          
+          setMessages(prev => {
+            // استبدال الرسالة الوهمية (Optimistic) بالرسالة الحقيقية من السيرفر
+            const optimisticIndex = prev.findIndex(m => m.isOptimistic && m.message === newMsg.message);
+            if (optimisticIndex > -1) {
+              const updated = [...prev];
+              updated[optimisticIndex] = newMsg;
+              return updated;
+            }
+            // إذا كانت رسالة جديدة من الطرف الآخر ولم تكن موجودة، أضفها
+            if (!prev.some(m => m.id === newMsg.id)) {
+               // إذا كنا فاتحين الشات، نعتبر الرسالة مقروءة فوراً
+               if (newMsg.receiver_id === myId) supabase.from('messages').update({ read: true }).eq('id', newMsg.id);
+               return [...prev, newMsg];
+            }
+            return prev;
+          });
+          scrollToBottom();
         }
       })
-      .subscribe();
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (payload) => {
+         // تحديث حالة الـ (✓✓) عندما يقرأ الطرف الآخر رسالتي
+         const updatedMsg = payload.new as MsgItem;
+         setMessages(prev => prev.map(m => m.id === updatedMsg.id ? updatedMsg : m));
+      })
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        // إذا كان المفتاح الخاص بالطرف الآخر موجوداً في الـ state، فهو متصل بنفس الغرفة
+        setIsOtherOnline(Object.keys(state).includes(other.id));
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') await channel.track({ online_at: new Date().toISOString() });
+      });
 
     return () => { supabase.removeChannel(channel); };
   }, [myId, other.id]);
 
-  const send = async () => {
+  const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
+    
     setInput('');
-    await supabase.from('messages').insert({
+    
+    // ⚡ Optimistic UI: عرض الرسالة فوراً للمستخدم قبل وصولها للسيرفر
+    const tempMsg: MsgItem & { isOptimistic: boolean } = {
+      id: `temp-${Date.now()}`,
       sender_id: myId,
       receiver_id: other.id,
       message: text,
-      read: false
+      created_at: new Date().toISOString(),
+      read: false,
+      isOptimistic: true,
+    };
+    
+    setMessages(prev => [...prev, tempMsg]);
+    scrollToBottom(true);
+
+    const { error } = await supabase.from('messages').insert({
+      sender_id: myId,
+      receiver_id: other.id,
+      message: text,
+      read: isOtherOnline // إذا كان متصلاً الآن بنفس الغرفة، تُعتبر مقروءة فوراً
     });
-  };
+
+    if (error) {
+       console.error("فشل إرسال الرسالة", error);
+       // يمكن هنا إضافة كود لإزالة الرسالة الوهمية وتنبيه المستخدم
+    }
+  }, [input, myId, other.id, isOtherOnline]);
 
   return (
     <div className="tab-fadein" style={{ position: 'fixed', inset: 0, background: '#03030a', display: 'flex', flexDirection: 'column', direction: 'rtl', color: '#f0f0ff', zIndex: 900 }}>
       
-      {/* Header */}
-      <div style={{ padding: '14px 16px', background: 'rgba(10,10,22,0.75)', backdropFilter: 'blur(30px)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-        <button type="button" onClick={onBack} style={{ width: 40, height: 40, borderRadius: 14, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {/* ── Header ── */}
+      <div style={{ padding: '12px 16px', background: 'rgba(5,5,12,0.85)', backdropFilter: 'blur(30px)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, zIndex: 10 }}>
+        <button type="button" onClick={onBack} style={{ width: 40, height: 40, borderRadius: 14, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }}>
           <BackIcon />
         </button>
 
@@ -74,15 +170,20 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
             ? <img src={other.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 16 }} />
             : name[0].toUpperCase()
           }
-          <div style={{ position: 'absolute', bottom: 1, right: 1, width: 10, height: 10, borderRadius: '50%', background: '#4ade80', border: '2px solid #03030a' }} />
+          {isOtherOnline && <div style={{ position: 'absolute', bottom: -2, right: -2, width: 14, height: 14, borderRadius: '50%', background: '#10b981', border: '3px solid #03030a' }} />}
         </div>
 
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: '1rem', fontWeight: 600 }}>{name}</div>
-          <div style={{ fontSize: '0.72rem', color: '#4ade80', display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', animation: 'pulse 2s infinite' }} />
-            متصل الآن
-          </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '1rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+          {isOtherOnline ? (
+            <div style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+              متصل الآن في المحادثة
+            </div>
+          ) : (
+             <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>
+              غير متصل
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
@@ -95,44 +196,38 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
         </div>
       </div>
 
-      {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* ── Messages Area ── */}
+      <div 
+        ref={scrollContainerRef}
+        style={{ flex: 1, overflowY: 'auto', padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 12, backgroundImage: 'radial-gradient(circle at center, rgba(124,58,237,0.03) 0%, transparent 70%)' }}
+      >
         {messages.map((msg, i) => {
           const isMe = msg.sender_id === myId;
           const showTime = i === messages.length - 1 || messages[i + 1]?.sender_id !== msg.sender_id;
           return (
-            <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-start' : 'flex-end' }}>
-              <div style={{
-                maxWidth: '75%', padding: '11px 16px', borderRadius: 20, fontSize: '0.9rem',
-                lineHeight: 1.5, wordBreak: 'break-word',
-                background: isMe ? 'linear-gradient(135deg,#7c3aed,#00d4ff)' : 'rgba(255,255,255,.05)',
-                border: isMe ? 'none' : '1px solid rgba(255,255,255,.03)',
-                borderBottomRightRadius: isMe ? 4 : 20,
-                borderBottomLeftRadius: isMe ? 20 : 4
-              }}>
-                {msg.message}
-              </div>
-              {showTime && (
-                <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,.3)', padding: '4px 6px' }}>
-                  {timeAgo(msg.created_at)}
-                </div>
-              )}
-            </div>
+            <MessageBubble key={msg.id} msg={msg} isMe={isMe} showTime={showTime} />
           );
         })}
-        <div ref={bottomRef} />
+        <div ref={bottomRef} style={{ height: 1 }} />
       </div>
 
-      {/* Input */}
-      <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,.05)', display: 'flex', gap: 10, background: 'rgba(3,3,10,.95)', backdropFilter: 'blur(10px)', paddingBottom: 'max(12px,env(safe-area-inset-bottom))' }}>
+      {/* ── Input Area ── */}
+      <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,.05)', display: 'flex', gap: 10, background: 'rgba(5,5,12,.95)', backdropFilter: 'blur(20px)', paddingBottom: 'max(12px,env(safe-area-inset-bottom))' }}>
         <input
           value={input}
           onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && send()}
-          placeholder="اكتب رسالة آمنة ومفرّرة..."
-          style={{ flex: 1, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 16, padding: '12px 16px', color: '#f0f0ff', fontSize: '0.9rem', outline: 'none' }}
+          onKeyDown={e => e.key === 'Enter' && handleSend()}
+          placeholder="اكتب رسالتك هنا..."
+          style={{ flex: 1, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 20, padding: '12px 18px', color: '#fff', fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s', fontFamily: "'Cairo', sans-serif" }}
+          onFocus={(e) => e.target.style.borderColor = 'rgba(0,212,255,0.4)'}
+          onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,.08)'}
         />
-        <button type="button" onClick={send} style={{ width: 46, height: 46, borderRadius: 16, flexShrink: 0, background: 'linear-gradient(135deg,#7c3aed,#00d4ff)', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <button 
+           type="button" 
+           onClick={handleSend} 
+           disabled={!input.trim()}
+           style={{ width: 48, height: 48, borderRadius: 20, flexShrink: 0, background: input.trim() ? 'linear-gradient(135deg,#7c3aed,#00d4ff)' : 'rgba(255,255,255,0.1)', border: 'none', color: input.trim() ? '#fff' : 'rgba(255,255,255,0.3)', cursor: input.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s', boxShadow: input.trim() ? '0 4px 15px rgba(0,212,255,0.3)' : 'none' }}
+        >
           <SendIcon />
         </button>
       </div>
