@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, memo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { supabase } from './supabase';
 
 // ── Components ──────────────────────────────────────────────────
@@ -211,6 +211,7 @@ const MatchTab = memo(({ onStartRandomMatch }: { onStartRandomMatch: () => void 
 const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string, onOpenChat: (p: any) => void, onUnreadUpdate: (u: number) => void }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [conversations, setConversations] = useState<ConvUser[]>([]);
+  const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 🚀 السحب الخارق للأداء باستخدام الدالة (RPC) الجديدة
   const fetchConversations = useCallback(async () => {
@@ -243,11 +244,28 @@ const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string,
 
   useEffect(() => {
     fetchConversations();
-    const channel = supabase.channel('dashboard-chats-tracker')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, fetchConversations)
+
+    // 🚀 مرشح على مستوى السيرفر: نستقبل فقط الرسائل الواردة إليّ أنا،
+    // بدلاً من الاستماع لكل رسائل التطبيق وإعادة الجلب عند كل رسالة عالمية.
+    // (رسائلي المُرسلة لا تحتاج استماعاً هنا: التبويب يُعاد تحميله عند العودة من الشات)
+    const scheduleRefetch = () => {
+      // ⏱️ Debounce: دفعة رسائل متتالية = عملية جلب واحدة فقط
+      if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
+      refetchTimerRef.current = setTimeout(fetchConversations, 400);
+    };
+
+    const channel = supabase.channel(`chats-tracker-${userId}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${userId}` },
+        scheduleRefetch
+      )
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [fetchConversations]);
+
+    return () => {
+      if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
+      supabase.removeChannel(channel);
+    };
+  }, [fetchConversations, userId]);
 
   const filteredConvs = conversations.filter(c => !searchQuery || (c.profile.full_name || '').includes(searchQuery) || (c.profile.username || '').includes(searchQuery));
 

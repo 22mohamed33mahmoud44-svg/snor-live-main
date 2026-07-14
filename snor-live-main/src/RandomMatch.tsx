@@ -1,15 +1,20 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from './supabase';
-import { startMatching, cancelMatching } from './match';
+import { startMatching, cancelMatching, type Match } from './match';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type Props = {
   userId: string;
   onClose: () => void;
-  onMatch: (match: any) => void;
+  onMatch: (match: Match) => void;
 };
 
-type Phase = 'idle' | 'waiting' | 'matched';
+type Phase = 'idle' | 'waiting' | 'matched' | 'error';
+
+// نطاق البحث عن مباراة حديثة (للفحص الاحتياطي) — دقيقتان
+const RECENT_MATCH_WINDOW_MS = 2 * 60 * 1000;
+// فاصل الفحص الاحتياطي الدوري أثناء الانتظار
+const POLL_INTERVAL_MS = 4000;
 
 export default function RandomMatch({ userId, onClose, onMatch }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
@@ -17,23 +22,34 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
 
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const dotsTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const matchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const matchedRef = useRef(false);
+  const startingRef = useRef(false);
+  // مرجع للمرحلة الحالية حتى يعمل تنظيف "عند الإغلاق فقط" بالقيمة الصحيحة
+  // (سابقاً كان الـ effect يعتمد على [phase] فيعمل التنظيف عند كل تغيير مرحلة)
+  const phaseRef = useRef<Phase>('idle');
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
 
-  // 🔊 مراجع الصوت (استخدمنا روابط موثوقة لضمان عملها فوراً)
+  const setPhaseSafe = useCallback((p: Phase) => {
+    phaseRef.current = p;
+    setPhase(p);
+  }, []);
+
+  // 🔊 مراجع الصوت
   const radarAudioRef = useRef<HTMLAudioElement | null>(null);
   const successAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // تهيئة الأصوات عند فتح المكون
   useEffect(() => {
     radarAudioRef.current = new Audio('https://actions.google.com/sounds/v1/science_fiction/sonar_ping.ogg');
-    radarAudioRef.current.loop = true; // تكرار صوت الرادار
+    radarAudioRef.current.loop = true;
     radarAudioRef.current.volume = 0.4;
 
     successAudioRef.current = new Audio('https://actions.google.com/sounds/v1/state_of_mind/success_bell.ogg');
     successAudioRef.current.volume = 0.8;
 
     return () => {
-      // 🧹 تنظيف الذاكرة وإيقاف الصوت عند إغلاق الشاشة
       radarAudioRef.current?.pause();
       successAudioRef.current?.pause();
       radarAudioRef.current = null;
@@ -52,41 +68,90 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
     return () => { if (dotsTimer.current) clearInterval(dotsTimer.current); };
   }, [phase]);
 
-  // حماية من تعليق النظام لو المستخدم قفل التطبيق فجأة
-  useEffect(() => {
-    return () => {
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      if (phase === 'waiting') cancelMatching(userId);
-    };
-  }, [userId, phase]);
-
-  const handleMatchFound = useCallback((match: any) => {
-    if (matchedRef.current) return;
-    matchedRef.current = true;
-
+  // 🧹 إيقاف كل موارد البحث (القناة + الفحص الدوري + صوت الرادار)
+  const stopSearchResources = useCallback(() => {
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     }
-
-    // 🔊 تبديل الصوت من الرادار إلى النجاح
+    if (pollTimer.current) {
+      clearInterval(pollTimer.current);
+      pollTimer.current = null;
+    }
     radarAudioRef.current?.pause();
     if (radarAudioRef.current) radarAudioRef.current.currentTime = 0;
-    successAudioRef.current?.play().catch(() => {}); // catch لمنع أخطاء المتصفح
+  }, []);
 
-    setPhase('matched');
-    setTimeout(() => onMatch(match), 1800); // إعطاء وقت للمستخدم لرؤية الأنميشن
-  }, [onMatch]);
+  const handleMatchFound = useCallback((match: Match) => {
+    // حارس ضد التكرار: قد يصل نفس الحدث من القناة اللحظية ومن الفحص الاحتياطي معاً
+    if (matchedRef.current) return;
+    matchedRef.current = true;
+
+    stopSearchResources();
+    successAudioRef.current?.play().catch(() => {});
+    setPhaseSafe('matched');
+
+    // ⏱️ مؤقت الاحتفال يُحفظ في مرجع ليُلغى عند إغلاق الشاشة
+    // (سابقاً كان يشتغل حتى بعد فك المكون ويسحب المستخدم لمكالمة وهو خارجها)
+    matchTimer.current = setTimeout(() => onMatch(match), 1800);
+  }, [onMatch, setPhaseSafe, stopSearchResources]);
+
+  // 🔍 فحص احتياطي: هل توجد مباراة نشطة حديثة أنا طرف فيها؟
+  // يغطي حالة ضياع حدث INSERT (انقطاع websocket لحظي أو أي سباق آخر)
+  const checkExistingMatch = useCallback(async () => {
+    if (matchedRef.current) return;
+    const cutoff = new Date(Date.now() - RECENT_MATCH_WINDOW_MS).toISOString();
+    const { data } = await supabase
+      .from('matches')
+      .select('id, user1, user2, status, created_at')
+      .eq('status', 'active')
+      .or(`user1.eq.${userId},user2.eq.${userId}`)
+      .gte('created_at', cutoff)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (data && !matchedRef.current) {
+      handleMatchFound(data as Match);
+    }
+  }, [userId, handleMatchFound]);
 
   // ── Start matching ───────────────────────────────────────────
   const handleStart = async () => {
+    // حارس ضد الضغط المتكرر على الزر
+    if (startingRef.current || phaseRef.current === 'waiting') return;
+    startingRef.current = true;
+
     matchedRef.current = false;
-    setPhase('waiting');
-    
-    // 🔊 تشغيل صوت الرادار
+    setPhaseSafe('waiting');
     radarAudioRef.current?.play().catch(() => {});
 
     try {
+      // 1️⃣ الاشتراك في القناة *أولاً* وانتظار تأكيد SUBSCRIBED
+      //    قبل استدعاء الـ RPC — هذا يغلق نافذة السباق التي كانت
+      //    تضيع فيها أحداث INSERT بين رد الـ RPC وتفعيل الاشتراك.
+      const onInsert = (payload: { new: Record<string, unknown> }) => {
+        handleMatchFound(payload.new as unknown as Match);
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        const channel = supabase
+          .channel(`my-match-${userId}-${Date.now()}`)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches', filter: `user1=eq.${userId}` }, onInsert)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches', filter: `user2=eq.${userId}` }, onInsert)
+          .subscribe((status) => {
+            if (status === 'SUBSCRIBED') resolve();
+            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') reject(new Error(`channel ${status}`));
+            // ملاحظة: لو حدث خطأ بالقناة لاحقاً أثناء الانتظار،
+            // الفحص الدوري أدناه يستمر كشبكة أمان.
+          });
+        channelRef.current = channel;
+      });
+
+      // المستخدم ألغى أثناء الاشتراك؟
+     if ((phaseRef.current as string) !== 'waiting') return;
+
+      // 2️⃣ الآن فقط نستدعي الـ RPC الآمنة (transaction + FOR UPDATE SKIP LOCKED)
       const result = await startMatching(userId);
 
       if (result.status === 'matched' && result.match) {
@@ -94,51 +159,73 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
         return;
       }
 
-      // الاشتراك السريع في القناة لسماع أي تحديثات فورية
-      const onInsert = (payload: { new: Record<string, unknown> }) => {
-        const m = payload.new as { id: string; user1: string; user2: string };
-        handleMatchFound(m);
-      };
-
-      const channel = supabase
-        .channel('my-match-' + userId + '-' + Date.now())
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches', filter: `user1=eq.${userId}` }, onInsert)
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches', filter: `user2=eq.${userId}` }, onInsert)
-        .subscribe();
-
-      channelRef.current = channel;
-
+      // 3️⃣ فحص فوري بعد الدخول لقائمة الانتظار + فحص دوري كشبكة أمان
+      await checkExistingMatch();
+     if ((phaseRef.current as string) === 'waiting') {
+        pollTimer.current = setInterval(checkExistingMatch, POLL_INTERVAL_MS);
+      }
     } catch (err) {
       console.error('startMatching error:', err);
-      radarAudioRef.current?.pause();
-      setPhase('idle');
+      stopSearchResources();
+      // لا نترك صف انتظار معلقاً لو الـ RPC نجحت ثم فشل شيء آخر
+      cancelMatching(userId).catch(() => {});
+      setPhaseSafe('error');
+    } finally {
+      startingRef.current = false;
     }
   };
 
   // ── Cancel while waiting ─────────────────────────────────────
   const handleCancel = async () => {
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
-    
-    // 🔊 إيقاف الصوت
-    radarAudioRef.current?.pause();
-    if (radarAudioRef.current) radarAudioRef.current.currentTime = 0;
+    // لو المطابقة تمت بالفعل في نفس لحظة الضغط، لا نلغي — الاحتفال جارٍ
+    if (matchedRef.current) return;
 
+    stopSearchResources();
     await cancelMatching(userId);
-    setPhase('idle');
+
+    // 🛡️ سباق الإلغاء: قد يكون شريك قد طابقنا في اللحظة نفسها قبل حذف
+    // صف الانتظار. لو وُجدت مباراة نشطة حديثة، ننهيها ونرسل إشارة end
+    // حتى لا يبقى الطرف الآخر معلقاً في مكالمة فارغة.
+    const cutoff = new Date(Date.now() - RECENT_MATCH_WINDOW_MS).toISOString();
+    const { data: strayMatch } = await supabase
+      .from('matches')
+      .select('id')
+      .eq('status', 'active')
+      .or(`user1.eq.${userId},user2.eq.${userId}`)
+      .gte('created_at', cutoff)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (strayMatch && !matchedRef.current) {
+      await supabase.from('matches').update({ status: 'ended' }).eq('id', strayMatch.id);
+      await supabase.from('signals').insert({ match_id: strayMatch.id, type: 'end', data: {}, sender: userId });
+    }
+
+    setPhaseSafe('idle');
   };
+
+  // 🧹 تنظيف عند إغلاق الشاشة فقط (وليس عند كل تغيير مرحلة كما كان سابقاً)
+  useEffect(() => {
+    return () => {
+      if (matchTimer.current) clearTimeout(matchTimer.current);
+      if (pollTimer.current) clearInterval(pollTimer.current);
+      if (channelRef.current) supabase.removeChannel(channelRef.current);
+      if (phaseRef.current === 'waiting') {
+        cancelMatching(userIdRef.current).catch(() => {});
+      }
+    };
+  }, []);
 
   // ── Render ───────────────────────────────────────────────────
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       style={s.overlay}
     >
       <style>{CSS}</style>
 
-      {phase === 'idle' && (
+      {(phase === 'idle' || phase === 'error') && (
         <button style={s.closeBtn} onClick={onClose} aria-label="إغلاق">✕</button>
       )}
 
@@ -171,6 +258,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
           {phase === 'idle'    && '🎲'}
           {phase === 'waiting' && '🔍'}
           {phase === 'matched' && '🎉'}
+          {phase === 'error'   && '⚠️'}
         </motion.div>
       </AnimatePresence>
 
@@ -178,26 +266,28 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
         {phase === 'idle'    && 'مطابقة عشوائية'}
         {phase === 'waiting' && `جاري البحث${dots}`}
         {phase === 'matched' && 'تم العثور على شريك!'}
+        {phase === 'error'   && 'حدث خطأ في الاتصال'}
       </h2>
 
       <p style={s.sub}>
         {phase === 'idle'    && 'اضغط ابدأ وهنوصّلك بشخص عشوائي على فيديو كول فوراً'}
         {phase === 'waiting' && 'بندور على شخص ليك… استنى لحظة'}
         {phase === 'matched' && 'بيتم الاتصال الآن… استعد!'}
+        {phase === 'error'   && 'تعذر بدء البحث. تأكد من اتصالك بالإنترنت وحاول مرة أخرى'}
       </p>
 
       {/* أزرار التحكم */}
-      {phase === 'idle' && (
-        <motion.button 
+      {(phase === 'idle' || phase === 'error') && (
+        <motion.button
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
           style={s.btnPrimary} onClick={handleStart}
         >
-          ابدأ المطابقة الآن
+          {phase === 'error' ? 'إعادة المحاولة' : 'ابدأ المطابقة الآن'}
         </motion.button>
       )}
-      
+
       {phase === 'waiting' && (
-        <motion.button 
+        <motion.button
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
           style={s.btnGhost} onClick={handleCancel}
         >
@@ -260,13 +350,13 @@ const s: Record<string, React.CSSProperties> = {
 
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
-  
+
   .rm-ring {
     position: absolute; border-radius: 50%;
     border: 2px solid rgba(0, 212, 255, 0.4);
     background: radial-gradient(circle, rgba(0,212,255,0.1) 0%, transparent 70%);
   }
-  
+
   .rm-avatar {
     width: 120px; height: 120px; border-radius: 50%;
     background: linear-gradient(135deg, #2a2a35 0%, #1a1a24 100%);
@@ -276,7 +366,7 @@ const CSS = `
     box-shadow: 0 0 40px rgba(0,0,0,0.5);
     z-index: 10;
   }
-  
+
   .rm-avatar--matched {
     background: linear-gradient(135deg, #10b981 0%, #059669 100%);
     border-color: #34d399;
