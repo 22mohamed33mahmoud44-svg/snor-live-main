@@ -99,7 +99,7 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
   );
 }
 
-// ── واجهة المستخدم والمكونات التفاعلية الداخلية ──
+// ── واجهة المستخدم والمك��نات التفاعلية الداخلية ──
 function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted, camOff, setCamOff }: Props & { muted: boolean, setMuted: any, camOff: boolean, setCamOff: any }) {
   const [mirrored, setMirrored] = useState(true);
   const [duration, setDuration] = useState(0);
@@ -112,6 +112,14 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sfxRef = useRef<HTMLAudioElement | null>(null);
+  const endingRef = useRef(false); // منع الضغط المزدوج على "التالي/خروج"
+
+  // ✅ M4 fix: مراجع ثابتة للـ callbacks — عشان قناة الـ Realtime
+  // ما تتفصل وتتعاد كل ما الـ Parent يعمل re-render ويغير مرجع onEnd
+  const onEndRef = useRef(onEnd);
+  const showChatRef = useRef(showChat);
+  useEffect(() => { onEndRef.current = onEnd; }, [onEnd]);
+  useEffect(() => { showChatRef.current = showChat; }, [showChat]);
 
   // استخدام هوك LiveKit لجلب حالة الاتصال الحقيقية بالسيرفر
   const connectionState = useConnectionState();
@@ -134,13 +142,16 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
     if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; }
   }, []);
 
+  // ✅ M4 fix: نقرأ showChat من الـ ref — النسخة القديمة كانت بتلتقط
+  // قيمة قديمة (stale closure) وبتعيد إنشاء الدالة مع كل تغيير للشات،
+  // مما كان يعيد تشغيل الـ effect المرتبط بها بلا داعٍ
   const resetControlsTimer = useCallback(() => {
     setShowControls(true);
     if (controlsTimer.current) clearTimeout(controlsTimer.current);
     controlsTimer.current = setTimeout(() => {
-      if (!showChat) setShowControls(false);
-    }, 5000); 
-  }, [showChat]);
+      if (!showChatRef.current) setShowControls(false);
+    }, 5000);
+  }, []);
 
   // إدارة الأصوات بناءً على حالة الاتصال
   useEffect(() => {
@@ -148,6 +159,12 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
     else stopSFX();
     return () => stopSFX();
   }, [isConnected, playSFX, stopSFX]);
+
+  // ✅ M4 fix: إيقاف أي صوت شغال عند إغلاق المكون نهائياً —
+  // صوت "النهاية" كان يستمر بالتشغيل بعد الـ unmount (memory leak)
+  useEffect(() => {
+    return () => stopSFX();
+  }, [stopSFX]);
 
   // عداد المكالمة
   useEffect(() => {
@@ -168,30 +185,45 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
   }, [resetControlsTimer]);
 
   // مراقبة الشات واستقبال إشعارات المغادرة (End) عبر Supabase للحفاظ على الـ Database History
+  // ✅ M4 fix: الاعتماد فقط على matchId/userId — القناة كانت بتتفصل
+  // وتتعاد الاشتراك مع كل re-render بسبب onEnd/playSFX في الـ deps،
+  // وممكن تضيع رسائل أو إشارة "end" أثناء إعادة الاشتراك
   useEffect(() => {
     const channelName = `vc-chat-sig-${matchId}`;
     const channel = supabase.channel(channelName)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` }, payload => {
-        setMessages(prev => [...prev, payload.new as any]);
-        setNewMsg(true);
+        const incoming = payload.new as { id: string; sender_id: string; message: string };
+        setMessages(prev => (prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming]));
+        if (incoming.sender_id !== userId) setNewMsg(true);
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` }, payload => {
         const msg = payload.new as any;
         if (msg.sender !== userId && msg.type === 'end') {
-          playSFX(SFX_END);
-          onEnd();
+          if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; }
+          const audio = new Audio(SFX_END);
+          audio.volume = 0.4;
+          audio.play().catch(() => {});
+          sfxRef.current = audio;
+          onEndRef.current();
         }
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [matchId, userId, onEnd, playSFX]);
+  }, [matchId, userId]);
 
   // ── إجراءات الأزرار (Actions) ──
   const triggerEndMatch = async (action: 'next' | 'end') => {
+    if (endingRef.current) return; // ✅ منع النقر المزدوج وإرسال إشارات مكررة
+    endingRef.current = true;
     playSFX(SFX_END);
-    await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId);
-    await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId });
-    action === 'next' ? onNext() : onEnd();
+    try {
+      const { error: matchError } = await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId);
+      if (matchError) console.error('Failed to end match:', matchError.message);
+      const { error: signalError } = await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId });
+      if (signalError) console.error('Failed to send end signal:', signalError.message);
+    } finally {
+      action === 'next' ? onNext() : onEnd();
+    }
   };
 
   const sendMessage = async () => {
@@ -257,7 +289,7 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
           <div className="vc-chat-scroller">
             {messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}
             {messages.map((msg, i) => (
-              <div key={i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}>
+              <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}>
                 <div className="vc-bubble-text">{msg.message}</div>
               </div>
             ))}
@@ -268,7 +300,7 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
               className="vc-chat-native-input"
               value={input}
               onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && sendMessage()}
+              onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && sendMessage()}
               placeholder="اكتب رسالة سريعة للطرف الآخر..."
             />
             <button type="button" className="vc-chat-submit-btn" onClick={sendMessage}><SendIcon /></button>

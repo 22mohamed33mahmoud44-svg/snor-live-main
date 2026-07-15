@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./supabase";
 
 const PACKAGES = [
@@ -7,27 +7,51 @@ const PACKAGES = [
   { id: "pkg_1000", coins: 1000, price: 80, label: "أفضل قيمة", emoji: "👑", color: "#10b981", popular: false },
 ];
 
-type Step = "select" | "loading" | "error" | "success";
+type Step = "select" | "loading" | "awaiting_payment" | "error" | "success";
 
-// ✅ دالة مساعدة تنتظر الـ script يتحمل
+// ✅ M2 fix: كاش للـ Promise — مهما اتنادت الدالة، الـ script يتحمل
+// مرة واحدة وبـ listener واحد فقط (كان بيتضاف listener جديد مع كل نداء)
+// + الآن الدالة بترفض (reject) عند فشل التحميل بدل ما تعلّق للأبد
+let xsollaScriptPromise: Promise<void> | null = null;
+
 function loadXsollaScript(): Promise<void> {
-  return new Promise((resolve) => {
+  if ((window as any).XPayStationWidget) return Promise.resolve();
+  if (xsollaScriptPromise) return xsollaScriptPromise;
+
+  xsollaScriptPromise = new Promise<void>((resolve, reject) => {
     const scriptId = "xsolla-widget-script";
-    if ((window as any).XPayStationWidget) {
+    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
+    const script = existing ?? document.createElement("script");
+
+    const timeoutId = window.setTimeout(() => {
+      xsollaScriptPromise = null; // اسمح بإعادة المحاولة
+      reject(new Error("انتهت مهلة تحميل بوابة الدفع، تحقق من اتصالك بالإنترنت"));
+    }, 15000);
+
+    const onLoad = () => {
+      window.clearTimeout(timeoutId);
       resolve();
-      return;
-    }
-    let script = document.getElementById(scriptId) as HTMLScriptElement;
-    if (!script) {
-      script = document.createElement("script");
+    };
+    const onError = () => {
+      window.clearTimeout(timeoutId);
+      script.remove();
+      xsollaScriptPromise = null; // اسمح بإعادة المحاولة
+      reject(new Error("فشل تحميل بوابة الدفع"));
+    };
+
+    script.addEventListener("load", onLoad, { once: true });
+    script.addEventListener("error", onError, { once: true });
+
+    if (!existing) {
       script.id = scriptId;
       script.type = "text/javascript";
       script.async = true;
       script.src = "https://cdn.xsolla.net/payments-bucket-prod/embed/1.5.0/widget.min.js";
       document.head.appendChild(script);
     }
-    script.addEventListener("load", () => resolve());
   });
+
+  return xsollaScriptPromise;
 }
 
 export default function BuyCoins({ onClose }: { onClose?: () => void }) {
@@ -36,10 +60,56 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
   const [errorMsg, setErrorMsg] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
 
-  // جلب الـ ID الخاص بالمستخدم الحالي
+  // ✅ M2 fix: مرجع دائم لآخر قيمة للـ step — الـ close handler بتاع
+  // الـ Widget كان بيقرأ نسخة قديمة (stale closure) من الـ state
+  const stepRef = useRef<Step>(step);
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUserId(data.user?.id || null));
-    loadXsollaScript();
+    stepRef.current = step;
+  }, [step]);
+
+  // ✅ M2 fix: تسجيل الـ close handler مرة واحدة فقط + فصله عند الـ unmount
+  const closeHandlerAttachedRef = useRef(false);
+  const widgetCloseHandlerRef = useRef<(() => void) | null>(null);
+
+  const attachWidgetCloseHandler = useCallback((XPayStationWidget: any) => {
+    if (closeHandlerAttachedRef.current) return;
+
+    const handler = () => {
+      // نقرأ أحدث قيمة من الـ ref وليس من الـ closure
+      if (stepRef.current !== "success") setStep("select");
+    };
+    widgetCloseHandlerRef.current = handler;
+    XPayStationWidget.on("close", handler);
+    closeHandlerAttachedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const XPayStationWidget = (window as any).XPayStationWidget;
+      if (XPayStationWidget?.off && widgetCloseHandlerRef.current) {
+        try {
+          XPayStationWidget.off("close", widgetCloseHandlerRef.current);
+        } catch {
+          /* الـ widget قد يكون اتشال بالفعل */
+        }
+      }
+      closeHandlerAttachedRef.current = false;
+      widgetCloseHandlerRef.current = null;
+    };
+  }, []);
+
+  // جلب الـ ID الخاص بالمستخدم الحالي + تحميل مسبق للـ script
+  useEffect(() => {
+    let cancelled = false;
+    supabase.auth.getUser().then(({ data }) => {
+      if (!cancelled) setUserId(data.user?.id || null);
+    });
+    loadXsollaScript().catch(() => {
+      /* تحميل مسبق فقط — الخطأ الفعلي يُعالج داخل handleBuy */
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // 🛡️ المراقبة اللحظية للرصيد (لإظهار شاشة النجاح فور إضافة السيرفر للكوينز)
@@ -47,13 +117,16 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
     if (!userId) return;
 
     const subscription = supabase
-      .channel('coins-update')
+      .channel(`buy-coins-update-${userId}`)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'users_coins', filter: `user_id=eq.${userId}` },
-        (payload) => {
-          console.log("تم رصد تحديث في الرصيد!", payload);
-          setStep("success"); // تحويل الواجهة لـ "تمت العملية" فوراً
+        () => {
+          // ✅ M2 fix: لا نعرض "نجاح" إلا لو فعلاً في عملية دفع جارية —
+          // كان أي تحديث للرصيد (حتى الصرف) يعرض شاشة "تم الشحن بنجاح"
+          if (stepRef.current === "loading" || stepRef.current === "awaiting_payment") {
+            setStep("success");
+          }
         }
       )
       .subscribe();
@@ -76,16 +149,14 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
       if (error) throw error;
       if (!data?.token) throw new Error("لم يتم استلام توكن الدفع من الخادم");
 
-      // 2. انتظر الـ script يتحمل
+      // 2. انتظر الـ script يتحمل (الآن مع timeout ومعالجة فشل حقيقية)
       await loadXsollaScript();
 
       const XPayStationWidget = (window as any).XPayStationWidget;
 
       if (XPayStationWidget) {
-        // ✅ إغلاق الـ Widget يعيدنا لشاشة الاختيار
-        XPayStationWidget.on('close', () => {
-             if (step !== 'success') setStep("select");
-        });
+        // ✅ يتسجل مرة واحدة فقط مهما تكررت محاولات الشراء
+        attachWidgetCloseHandler(XPayStationWidget);
 
         XPayStationWidget.init({
           access_token: data.token,
@@ -97,6 +168,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
           },
         });
         XPayStationWidget.open();
+        setStep("awaiting_payment");
       } else {
         // خطة بديلة لو الـ widget مش شغال
         window.open(
@@ -104,7 +176,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
           "_blank",
           "width=820,height=720"
         );
-        setStep("select");
+        setStep("awaiting_payment");
       }
     } catch (err: any) {
       setErrorMsg(err.message ?? "حدث خطأ غير متوقع أثناء معالجة الطلب");

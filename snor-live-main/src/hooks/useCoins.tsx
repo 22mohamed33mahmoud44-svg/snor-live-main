@@ -1,50 +1,108 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "../supabase";
 
 export function useCoins() {
-  const [coins, setCoins] = useState<number>(0); // خليناها بتبدأ بـ 0 عشان الـ UI ميبقاش فاضي
+  const [coins, setCoins] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(true);
+  const userIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    let channel: any;
-
-    const init = async () => {
-      // 1. نجيب الـ User الحالي المسجل دخول
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      // 2. نجيب الرصيد الحالي من الجدول
-      const { data } = await supabase
-        .from("users_coins")
-        .select("coins")
-        .eq("user_id", user.id)
-        .maybeSingle(); // أضمن من single عشان لو الحساب لسه جديد ومفيش سطر ليه جواه ميعملش كراش
-
-      if (data) {
-        setCoins(data.coins);
-      }
-
-      // 3. تشغيل الـ Realtime عشان لو شحن أو صرف الكوينز تتحدث في نفس الثانية بدون ريفريش
-      channel = supabase
-        .channel(`coins-realtime-${user.id}`)
-        .on("postgres_changes", {
-          event: "*", // استماع لكل التغييرات (UPDATE أو INSERT) لضمان الأمان
-          schema: "public",
-          table: "users_coins",
-          filter: `user_id=eq.${user.id}`,
-        }, (payload: any) => {
-          if (payload.new && typeof payload.new.coins === 'number') {
-            setCoins(payload.new.coins);
-          }
-        })
-        .subscribe();
-    };
-
-    init();
-
-    return () => {
-      if (channel) supabase.removeChannel(channel);
-    };
+  // إعادة جلب الرصيد يدوياً (مفيدة بعد عمليات الشراء/الصرف)
+  const refresh = useCallback(async () => {
+    const userId = userIdRef.current;
+    if (!userId) return;
+    const { data, error } = await supabase
+      .from("users_coins")
+      .select("coins")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!error && data && typeof data.coins === "number") {
+      setCoins(data.coins);
+    }
   }, []);
 
-  return { coins };
+  useEffect(() => {
+    // ✅ M1 fix: علم إلغاء + مرجع للقناة، حتى لو اتعمل unmount أثناء
+    // العمليات الـ async لا يتبقى أي اشتراك Realtime معلق (memory leak)
+    let cancelled = false;
+    let channel: RealtimeChannel | null = null;
+
+    const teardownChannel = () => {
+      if (channel) {
+        supabase.removeChannel(channel);
+        channel = null;
+      }
+    };
+
+    const init = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (cancelled) return;
+      if (!user) {
+        userIdRef.current = null;
+        setCoins(0);
+        setLoading(false);
+        return;
+      }
+      userIdRef.current = user.id;
+
+      // 1) الاشتراك أولاً، وبعد تأكيد الاشتراك نعيد الجلب مرة أخرى —
+      //    هذا يغلق الفجوة الزمنية بين "قراءة الرصيد" و"بدء الاستماع"
+      //    التي كانت ممكن تضيع فيها تحديثات
+      channel = supabase
+        .channel(`coins-realtime-${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "users_coins",
+            filter: `user_id=eq.${user.id}`,
+          },
+          (payload) => {
+            const next = (payload.new as { coins?: unknown } | null)?.coins;
+            if (typeof next === "number") setCoins(next);
+          },
+        )
+        .subscribe((status) => {
+          if (status === "SUBSCRIBED" && !cancelled) {
+            void refresh();
+          }
+        });
+
+      // لو حصل unmount أثناء انتظار getUser، نظّف القناة اللي لسه متعملة
+      if (cancelled) {
+        teardownChannel();
+        return;
+      }
+
+      // 2) جلب الرصيد الأولي
+      await refresh();
+      if (!cancelled) setLoading(false);
+    };
+
+    void init();
+
+    // ✅ M1 fix: متابعة تغيّر حالة تسجيل الدخول — عند الخروج نصفّر
+    // الرصيد ونشيل الاشتراك بدل ما يفضل مستمعاً لمستخدم قديم
+    const {
+      data: { subscription: authSubscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        userIdRef.current = null;
+        setCoins(0);
+        teardownChannel();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      teardownChannel();
+      authSubscription.unsubscribe();
+    };
+  }, [refresh]);
+
+  return { coins, loading, refresh };
 }
