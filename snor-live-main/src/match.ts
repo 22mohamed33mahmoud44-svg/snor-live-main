@@ -28,7 +28,6 @@ export const startMatching = async (userId: string): Promise<MatchResult> => {
     .rpc('atomic_match_or_wait', { p_user_id: userId });
 
   if (error) {
-    console.error('startMatching RPC error:', error);
     throw new Error(error.message);
   }
 
@@ -50,8 +49,6 @@ export const cancelMatching = async (userId: string): Promise<void> => {
     .rpc('cancel_waiting', { p_user_id: userId });
 
   if (error) {
-    console.error('cancelMatching RPC error:', error);
-    // مش fatal — حتى لو فشل، الـ waiting_users row هتتشال
-    // بعدين لما المستخدم يقطع الاتصال
+    // non-fatal — waiting_users row will be cleaned up later
   }
 };

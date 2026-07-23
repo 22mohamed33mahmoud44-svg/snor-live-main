@@ -164,8 +164,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
      if ((phaseRef.current as string) === 'waiting') {
         pollTimer.current = setInterval(checkExistingMatch, POLL_INTERVAL_MS);
       }
-    } catch (err) {
-      console.error('startMatching error:', err);
+    } catch {
       stopSearchResources();
       // لا نترك صف انتظار معلقاً لو الـ RPC نجحت ثم فشل شيء آخر
       cancelMatching(userId).catch(() => {});

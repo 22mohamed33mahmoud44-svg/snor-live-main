@@ -319,14 +319,13 @@ const ProfileTab = memo(({ myProfile, onLogout, onOpenSettings }: { myProfile: P
       <h2 style={{ fontSize: '1.4rem', fontWeight: 700 }}>{myProfile?.full_name || 'عضو سنور'}</h2>
       <div style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,.4)', marginTop: 4 }}>@{myProfile?.username}</div>
       <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14 }}>
-        <span className="profile-tag">ذكر 👨</span>
-        <span className="profile-tag active"><div className="dot" />حساب موثق</span>
+        <span className="profile-tag">{myProfile?.gender === 'female' ? '👩 أنثى' : '👨 ذكر'}</span>
       </div>
     </div>
     <div className="profile-stats-grid">
-      <div><div className="val">2,450</div><div className="lbl">دقيقة بث</div></div>
+      <div><div className="val">0</div><div className="lbl">دقيقة بث</div></div>
       <div className="line" />
-      <div><div className="val">540</div><div className="lbl">شاهدوا ملفك</div></div>
+      <div><div className="val">0</div><div className="lbl">شاهدوا ملفك</div></div>
     </div>
     <div style={{ padding: '0 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <button type="button" onClick={onOpenSettings} className="profile-btn primary"><GearIcon /> إعدادات الحساب والمظهر</button>

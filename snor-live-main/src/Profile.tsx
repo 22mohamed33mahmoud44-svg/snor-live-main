@@ -56,7 +56,14 @@ export default function Profile({
   }
 
   const age = profile?.birthdate
-    ? new Date().getFullYear() - new Date(profile.birthdate).getFullYear()
+    ? (() => {
+        const birth = new Date(profile.birthdate);
+        const today = new Date();
+        let a = today.getFullYear() - birth.getFullYear();
+        const m = today.getMonth() - birth.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) a--;
+        return a;
+      })()
     : null;
 
   return (
@@ -132,7 +139,7 @@ export default function Profile({
             backgroundColor: '#1f2937', color: '#06b6d4',
             padding: '5px 14px', borderRadius: '20px', fontSize: '13px',
           }}>
-            {profile?.gender === 'ذكر' ? '👨 ذكر' : '👩 أنثى'}
+            {profile?.gender === 'male' ? '👨 ذكر' : '👩 أنثى'}
           </span>
           {age && (
             <span style={{

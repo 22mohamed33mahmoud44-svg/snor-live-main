@@ -121,12 +121,12 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
         {/* النوع */}
         <div className="flex gap-3 mb-4">
           <button
-            onClick={() => setGender('ذكر')}
-            className={`flex-1 p-3.5 rounded-lg cursor-pointer text-base font-bold transition-colors ${gender === 'ذكر' ? 'bg-cyan-400 text-black' : 'bg-gray-800 text-white hover:bg-gray-700'}`}
+            onClick={() => setGender('male')}
+            className={`flex-1 p-3.5 rounded-lg cursor-pointer text-base font-bold transition-colors ${gender === 'male' ? 'bg-cyan-400 text-black' : 'bg-gray-800 text-white hover:bg-gray-700'}`}
           >👨 ذكر</button>
           <button
-            onClick={() => setGender('أنثى')}
-            className={`flex-1 p-3.5 rounded-lg cursor-pointer text-base font-bold transition-colors ${gender === 'أنثى' ? 'bg-pink-400 text-black' : 'bg-gray-800 text-white hover:bg-gray-700'}`}
+            onClick={() => setGender('female')}
+            className={`flex-1 p-3.5 rounded-lg cursor-pointer text-base font-bold transition-colors ${gender === 'female' ? 'bg-pink-400 text-black' : 'bg-gray-800 text-white hover:bg-gray-700'}`}
           >👩 أنثى</button>
         </div>
 

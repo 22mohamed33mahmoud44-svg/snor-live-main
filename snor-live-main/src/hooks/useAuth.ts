@@ -27,25 +27,43 @@ export function useAuth() {
         .maybeSingle();
 
       if (error) {
-        console.error('checkProfile error:', error);
         setProfileChecked(true);
         return;
       }
 
       setProfileChecked(true);
       if (!data) setShowOnboarding(true);
-    } catch (e) {
-      console.error('checkProfile exception:', e);
+    } catch {
       setProfileChecked(true);
     }
   };
 
   const handleOnboardingComplete = async (data: OnboardingData, userId: string) => {
+    let avatarUrl: string | null = null;
+
+    if (data.profileImage) {
+      try {
+        const res = await fetch(data.profileImage);
+        const blob = await res.blob();
+        const fileName = `avatar-${userId}-${Date.now()}.jpg`;
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true });
+        if (!uploadError && uploadData) {
+          const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
+          avatarUrl = publicUrl;
+        }
+      } catch {
+        // Image upload failed — continue without avatar
+      }
+    }
+
     await supabase.from('profiles').upsert({
       id:          userId,
       gender:      data.gender,
       birthdate:   data.birthdate,
       looking_for: data.lookingFor,
+      avatar_url:  avatarUrl,
     });
     setShowOnboarding(false);
   };
