@@ -218,9 +218,9 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
     playSFX(SFX_END);
     try {
       const { error: matchError } = await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId);
-      if (matchError) console.error('Failed to end match:', matchError.message);
+      if (matchError) { /* non-fatal */ }
       const { error: signalError } = await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId });
-      if (signalError) console.error('Failed to send end signal:', signalError.message);
+      if (signalError) { /* non-fatal */ }
     } finally {
       action === 'next' ? onNext() : onEnd();
     }

@@ -45,7 +45,7 @@ export const playRadarSound = () => {
       osc2.start();
       osc2.stop(ctx.currentTime + 0.3);
     }, 110);
-  } catch (e) {
-    console.error(e);
+  } catch {
+    // non-fatal
   }
 };
