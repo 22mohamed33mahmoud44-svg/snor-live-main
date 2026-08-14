@@ -1,12 +1,12 @@
 -- USERS COINS
-CREATE TABLE users_coins (
+CREATE TABLE IF NOT EXISTS users_coins (
   user_id    UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   coins      INTEGER NOT NULL DEFAULT 0 CHECK (coins >= 0),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- TRANSACTIONS
-CREATE TABLE transactions (
+CREATE TABLE IF NOT EXISTS transactions (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   type       TEXT NOT NULL CHECK (type IN ('buy','spend','earn','bonus','refund')),
@@ -14,10 +14,10 @@ CREATE TABLE transactions (
   meta       JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_transactions_user ON transactions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id, created_at DESC);
 
 -- GIFTS
-CREATE TABLE gifts (
+CREATE TABLE IF NOT EXISTS gifts (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   sender_id    UUID NOT NULL REFERENCES auth.users(id),
   receiver_id  UUID NOT NULL REFERENCES auth.users(id),
@@ -27,10 +27,10 @@ CREATE TABLE gifts (
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT no_self_gift CHECK (sender_id <> receiver_id)
 );
-CREATE INDEX idx_gifts_receiver ON gifts(receiver_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gifts_receiver ON gifts(receiver_id, created_at DESC);
 
 -- WITHDRAWALS
-CREATE TABLE withdrawals (
+CREATE TABLE IF NOT EXISTS withdrawals (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id      UUID NOT NULL REFERENCES auth.users(id),
   coins        INTEGER NOT NULL CHECK (coins >= 1000),
@@ -45,7 +45,7 @@ CREATE TABLE withdrawals (
 );
 
 -- VIP SUBSCRIPTIONS
-CREATE TABLE vip_subscriptions (
+CREATE TABLE IF NOT EXISTS vip_subscriptions (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       UUID NOT NULL REFERENCES auth.users(id),
   tier          TEXT NOT NULL CHECK (tier IN ('silver','gold','diamond')),
@@ -55,14 +55,14 @@ CREATE TABLE vip_subscriptions (
 );
 
 -- STRIPE EVENTS (idempotency)
-CREATE TABLE stripe_events (
+CREATE TABLE IF NOT EXISTS stripe_events (
   stripe_event_id TEXT PRIMARY KEY,
   type            TEXT NOT NULL,
   processed_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- DAILY BONUS
-CREATE TABLE daily_bonus_claims (
+CREATE TABLE IF NOT EXISTS daily_bonus_claims (
   user_id    UUID NOT NULL REFERENCES auth.users(id),
   claimed_on DATE NOT NULL DEFAULT CURRENT_DATE,
   PRIMARY KEY (user_id, claimed_on)
@@ -72,11 +72,13 @@ CREATE TABLE daily_bonus_claims (
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
-  INSERT INTO users_coins (user_id, coins) VALUES (NEW.id, 10);
+  INSERT INTO users_coins (user_id, coins) VALUES (NEW.id, 10)
+  ON CONFLICT (user_id) DO NOTHING;
   RETURN NEW;
 END;
 $$;
 
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION handle_new_user();
@@ -203,6 +205,13 @@ ALTER TABLE transactions      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gifts              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE withdrawals        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vip_subscriptions  ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "read own coins"         ON users_coins;
+DROP POLICY IF EXISTS "read own transactions"  ON transactions;
+DROP POLICY IF EXISTS "read own gifts"         ON gifts;
+DROP POLICY IF EXISTS "read own withdrawals"   ON withdrawals;
+DROP POLICY IF EXISTS "insert own withdrawal"  ON withdrawals;
+DROP POLICY IF EXISTS "read own vip"           ON vip_subscriptions;
 
 CREATE POLICY "read own coins"         ON users_coins       FOR SELECT USING (auth.uid() = user_id);
 CREATE POLICY "read own transactions"  ON transactions      FOR SELECT USING (auth.uid() = user_id);
