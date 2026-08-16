@@ -126,11 +126,15 @@ serve(async (req) => {
       metadata: JSON.stringify({ profile_name: displayName }),
     });
 
+    // صلاحيات Media تُشتق من authorization أعلاه.
+    // Data messages غير مستخدمة في التطبيق حالياً؛ التفاعل (الشات/الإعجابات/الهدايا)
+    // يتم عبر Supabase Realtime، لذلك نعطّل LiveKit Data Publishing بالكامل
+    // حتى لا يستطيع أي عميل نشر Data packets غير موثوقة داخل الغرفة.
     at.addGrant({
       roomJoin: true,
       room,
       canPublish,
-      canPublishData: true,
+      canPublishData: false,
       canSubscribe: true,
     });
 
