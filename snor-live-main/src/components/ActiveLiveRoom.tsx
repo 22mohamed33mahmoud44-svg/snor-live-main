@@ -575,10 +575,12 @@ export default function ActiveLiveRoom({
     });
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        stopHeartbeat();
-        navigator.sendBeacon(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/live_streams?id=eq.${streamId}`, JSON.stringify({ is_live: false }));
-      } else { startHeartbeat(); }
+      // Do not end the stream just because the page/app becomes hidden.
+      // Backgrounded tabs may temporarily pause/throttle timers; the
+      // server-side cleanup/heartbeat logic decides when a stream is dead.
+      if (document.visibilityState === 'visible') {
+        startHeartbeat();
+      }
     };
     
     document.addEventListener('visibilitychange', handleVisibilityChange);
