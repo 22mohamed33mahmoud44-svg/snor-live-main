@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../supabase';
 
 export interface OnboardingData {
@@ -15,7 +15,16 @@ export function useAuth() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showCompleteProfile, setShowCompleteProfile] = useState(false);
 
-  const checkProfile = async (userId: string) => {
+  // يمنع تكرار فحص نفس المستخدم بسبب تزامن getSession مع onAuthStateChange.
+  const profileCheckRequestRef = useRef(0);
+  const checkedUserIdRef = useRef<string | null>(null);
+
+  const checkProfile = useCallback(async (userId: string, force = false) => {
+    if (!force && checkedUserIdRef.current === userId) return;
+
+    const requestId = ++profileCheckRequestRef.current;
+    checkedUserIdRef.current = userId;
+
     setProfileChecked(false);
     setProfileError(null);
     setShowOnboarding(false);
@@ -28,6 +37,9 @@ export function useAuth() {
         .eq('id', userId)
         .maybeSingle();
 
+      // تجاهل نتيجة طلب قديم لو حدث تغيير للمستخدم أثناء الفحص.
+      if (requestId !== profileCheckRequestRef.current) return;
+
       if (error) {
         console.error('Profile check failed:', error);
         setProfileError('تعذر التحقق من ملفك الشخصي. حاول مرة أخرى.');
@@ -36,12 +48,15 @@ export function useAuth() {
 
       if (!data) setShowOnboarding(true);
     } catch (error) {
+      if (requestId !== profileCheckRequestRef.current) return;
       console.error('Profile check failed:', error);
       setProfileError('تعذر التحقق من ملفك الشخصي. حاول مرة أخرى.');
     } finally {
-      setProfileChecked(true);
+      if (requestId === profileCheckRequestRef.current) {
+        setProfileChecked(true);
+      }
     }
-  };
+  }, []);
 
   const handleOnboardingComplete = async (data: OnboardingData, userId: string) => {
     let avatarUrl: string | null = null;
@@ -92,6 +107,8 @@ export function useAuth() {
 
       setProfileError(null);
       setShowOnboarding(false);
+      setProfileChecked(true);
+      checkedUserIdRef.current = userId;
     } catch (error) {
       console.error('Profile save failed:', error);
       setProfileError('تعذر حفظ بيانات ملفك الشخصي. حاول مرة أخرى.');
@@ -99,7 +116,17 @@ export function useAuth() {
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    // إبطال أي فحص Profile سابق فور بدء تسجيل الخروج.
+    ++profileCheckRequestRef.current;
+    checkedUserIdRef.current = null;
+
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error('Logout failed:', error);
+      setProfileError('تعذر تسجيل الخروج. حاول مرة أخرى.');
+      return;
+    }
+
     setUser(null);
     setProfileChecked(false);
     setProfileError(null);
@@ -108,7 +135,29 @@ export function useAuth() {
   };
 
   useEffect(() => {
+    let mounted = true;
+
+    // التسجيل في listener أولاً يقلل احتمال فقدان حدث Auth أثناء استعادة الجلسة.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+
+      if (session?.user) {
+        setUser(session.user);
+        void checkProfile(session.user.id);
+      } else {
+        ++profileCheckRequestRef.current;
+        checkedUserIdRef.current = null;
+        setUser(null);
+        setProfileChecked(true);
+        setProfileError(null);
+        setShowOnboarding(false);
+        setShowCompleteProfile(false);
+      }
+    });
+
     supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (!mounted) return;
+
       if (error) {
         console.error('Session restore failed:', error);
         setProfileError('تعذر استعادة جلسة تسجيل الدخول. حاول تحديث الصفحة.');
@@ -124,26 +173,18 @@ export function useAuth() {
         setProfileChecked(true);
       }
     }).catch((error) => {
+      if (!mounted) return;
       console.error('Session restore failed:', error);
       setProfileError('تعذر استعادة جلسة تسجيل الدخول. حاول تحديث الصفحة.');
       setProfileChecked(true);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-      if (session?.user) {
-        setUser(session.user);
-        void checkProfile(session.user.id);
-      } else {
-        setUser(null);
-        setProfileChecked(true);
-        setProfileError(null);
-        setShowOnboarding(false);
-        setShowCompleteProfile(false);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      mounted = false;
+      ++profileCheckRequestRef.current;
+      subscription.unsubscribe();
+    };
+  }, [checkProfile]);
 
   return {
     user,
