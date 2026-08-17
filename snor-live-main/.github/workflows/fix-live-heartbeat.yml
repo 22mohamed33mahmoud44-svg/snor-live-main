@@ -1,0 +1,41 @@
+name: Fix live heartbeat lifecycle
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'snor-live-main/.github/workflows/fix-live-heartbeat.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch ActiveLiveRoom lifecycle
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('snor-live-main/src/components/ActiveLiveRoom.tsx')
+          s = p.read_text(encoding='utf-8')
+          old = '''    const handleVisibilityChange = () => {\n      if (document.visibilityState === 'hidden') {\n        stopHeartbeat();\n        navigator.sendBeacon(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/live_streams?id=eq.${streamId}`, JSON.stringify({ is_live: false }));\n      } else { startHeartbeat(); }\n    };'''
+          new = '''    const handleVisibilityChange = () => {\n      if (document.visibilityState === 'visible') {\n        // Keep the stream alive when the tab/app returns to the foreground.\n        // Do not use sendBeacon here: it has no Supabase auth context and RLS\n        // correctly blocks unauthenticated writes to live_streams.\n        startHeartbeat();\n      } else {\n        // Backgrounding is not the same as ending the stream. Let the server\n        // cleanup job decide whether a genuinely stale stream is offline.\n        stopHeartbeat();\n      }\n    };'''
+          if old not in s:
+              raise SystemExit('expected lifecycle block not found; aborting without changes')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Commit source fix and remove temporary workflow
+        shell: bash
+        run: |
+          rm -f snor-live-main/.github/workflows/fix-live-heartbeat.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add snor-live-main/src/components/ActiveLiveRoom.tsx snor-live-main/.github/workflows/fix-live-heartbeat.yml
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: stabilize live stream heartbeat lifecycle'
+          git push
