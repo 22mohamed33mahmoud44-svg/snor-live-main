@@ -20,6 +20,30 @@ const Loading = () => (
   </div>
 );
 
+const ProfileError = ({ message, onRetry }: { message: string; onRetry: () => void }) => (
+  <div
+    dir="rtl"
+    style={{
+      position: 'fixed', inset: 0, background: '#05050c', color: '#fff',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+      zIndex: 10000, textAlign: 'center', fontFamily: "'Cairo', sans-serif",
+    }}
+  >
+    <div style={{ maxWidth: 420, width: '100%' }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+      <h2 style={{ margin: '0 0 10px', fontSize: 22 }}>تعذر تحميل ملفك الشخصي</h2>
+      <p style={{ color: 'rgba(255,255,255,.65)', lineHeight: 1.7, margin: '0 0 24px' }}>{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        style={{ border: 0, borderRadius: 12, padding: '12px 28px', background: '#7c3aed', color: '#fff', cursor: 'pointer', fontSize: 16, fontWeight: 700 }}
+      >
+        إعادة المحاولة
+      </button>
+    </div>
+  </div>
+);
+
 function App() {
   const [lang,            setLang]            = useState<'ar' | 'en'>('ar');
   const [showSplash,      setShowSplash]      = useState(true);
@@ -28,12 +52,10 @@ function App() {
   const [showRandomMatch, setShowRandomMatch] = useState(false);
   const [currentMatch,    setCurrentMatch]    = useState<any>(null);
 
-  // ⚠️ تم إزالة الـ State التجريبية القديمة لـ activeLiveStream من هنا 
-  // لأن البثوث والمشاهدة أصبحت تُدار بشكل ديناميكي ممتاز وبدون أخطاء داخل الـ Dashboard والـ Grid
-
   const {
     user,
     profileChecked,
+    profileError,
     showOnboarding,
     showCompleteProfile,
     setShowCompleteProfile,
@@ -50,8 +72,6 @@ function App() {
   }, [lang, dir]);
 
   // ── Payment Success ──
-  // ملاحظة: يجب أن يأتي هذا الـ return بعد جميع استدعاءات الـ Hooks
-  // (مثل useState و useEffect) للحفاظ على ثبات ترتيب الـ Hooks بين عمليات الـ render
   if (window.location.pathname === '/payment/success') return (
     <Suspense fallback={<Loading />}>
       <PaymentSuccess />
@@ -70,7 +90,14 @@ function App() {
     </Suspense>
   );
 
-  // ── 2) Loading ──
+  // ── 2) Loading / profile error ──
+  if (user && profileError && !profileChecked) return (
+    <ProfileError
+      message={profileError}
+      onRetry={() => window.location.reload()}
+    />
+  );
+
   if (user && !profileChecked) return <Loading />;
 
   // ── 3) Onboarding ──
@@ -105,7 +132,6 @@ function App() {
       </Suspense>
     );
 
-    // الـ Dashboard هنا تم تنظيفها وتتوافق 100% مع الـ Props الحالية للنوع DashboardProps
     return (
       <Suspense fallback={<Loading />}>
         <Dashboard
