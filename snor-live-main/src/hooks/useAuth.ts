@@ -64,7 +64,8 @@ export function useAuth() {
         if (!blob.type.startsWith('image/')) throw new Error('Invalid image type');
         if (blob.size > 5 * 1024 * 1024) throw new Error('Image is larger than 5MB');
 
-        const fileName = `avatar-${userId}-${Date.now()}.jpg`;
+        // Storage RLS requires the first path segment to equal auth.uid().
+        const fileName = `${userId}/avatar-${Date.now()}.jpg`;
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('avatars')
           .upload(fileName, blob, { contentType: blob.type, upsert: true });
