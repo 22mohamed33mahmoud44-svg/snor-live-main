@@ -13,9 +13,7 @@ export function useAuth() {
   const [profileChecked, setProfileChecked] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [showCompleteProfile, setShowCompleteProfile] = useState(false);
 
-  // يمنع تكرار فحص نفس المستخدم بسبب تزامن getSession مع onAuthStateChange.
   const profileCheckRequestRef = useRef(0);
   const checkedUserIdRef = useRef<string | null>(null);
 
@@ -28,7 +26,6 @@ export function useAuth() {
     setProfileChecked(false);
     setProfileError(null);
     setShowOnboarding(false);
-    setShowCompleteProfile(false);
 
     try {
       const { data, error } = await supabase
@@ -37,7 +34,6 @@ export function useAuth() {
         .eq('id', userId)
         .maybeSingle();
 
-      // تجاهل نتيجة طلب قديم لو حدث تغيير للمستخدم أثناء الفحص.
       if (requestId !== profileCheckRequestRef.current) return;
 
       if (error) {
@@ -52,9 +48,7 @@ export function useAuth() {
       console.error('Profile check failed:', error);
       setProfileError('تعذر التحقق من ملفك الشخصي. حاول مرة أخرى.');
     } finally {
-      if (requestId === profileCheckRequestRef.current) {
-        setProfileChecked(true);
-      }
+      if (requestId === profileCheckRequestRef.current) setProfileChecked(true);
     }
   }, []);
 
@@ -75,13 +69,9 @@ export function useAuth() {
           .from('avatars')
           .upload(fileName, blob, { contentType: blob.type, upsert: true });
 
-        if (uploadError || !uploadData) {
-          throw uploadError ?? new Error('Avatar upload failed');
-        }
+        if (uploadError || !uploadData) throw uploadError ?? new Error('Avatar upload failed');
 
-        const { data: { publicUrl } } = supabase.storage
-          .from('avatars')
-          .getPublicUrl(fileName);
+        const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
         avatarUrl = publicUrl;
       } catch (error) {
         console.error('Avatar upload failed:', error);
@@ -116,7 +106,6 @@ export function useAuth() {
   };
 
   const logout = async () => {
-    // إبطال أي فحص Profile سابق فور بدء تسجيل الخروج.
     ++profileCheckRequestRef.current;
     checkedUserIdRef.current = null;
 
@@ -131,13 +120,11 @@ export function useAuth() {
     setProfileChecked(false);
     setProfileError(null);
     setShowOnboarding(false);
-    setShowCompleteProfile(false);
   };
 
   useEffect(() => {
     let mounted = true;
 
-    // التسجيل في listener أولاً يقلل احتمال فقدان حدث Auth أثناء استعادة الجلسة.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
 
@@ -151,7 +138,6 @@ export function useAuth() {
         setProfileChecked(true);
         setProfileError(null);
         setShowOnboarding(false);
-        setShowCompleteProfile(false);
       }
     });
 
@@ -191,8 +177,6 @@ export function useAuth() {
     profileChecked,
     profileError,
     showOnboarding,
-    showCompleteProfile,
-    setShowCompleteProfile,
     handleOnboardingComplete,
     logout,
   };
