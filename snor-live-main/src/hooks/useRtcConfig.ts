@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
 import { STUN_SERVERS } from '../constants/iceServers';
+import { logError } from '../utils/logError';
 
 export function useRtcConfig() {
   const [rtcConfig, setRtcConfig] = useState<RTCConfiguration>({
@@ -13,7 +14,8 @@ export function useRtcConfig() {
 
     async function fetchTurnCredentials() {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) logError('useRtcConfig.getSession', sessionError);
         if (!session) return;
 
         const res = await fetch(
@@ -23,14 +25,18 @@ export function useRtcConfig() {
           }
         );
 
-        if (!res.ok) return;
+        if (!res.ok) {
+          logError('useRtcConfig.getTurnCredentials', new Error(`TURN endpoint responded ${res.status}`));
+          return;
+        }
 
         const { iceServers } = await res.json();
         if (!cancelled && iceServers?.length) {
           setRtcConfig({ iceServers: [...STUN_SERVERS, ...iceServers] });
         }
-      } catch {
-        // fallback لـ STUN فقط — لا نكشف شيء
+      } catch (error) {
+        // الاتصال يكمل بـ STUN فقط، لكن السبب يجب أن يظهر في السجلات
+        logError('useRtcConfig.getTurnCredentials', error);
       } finally {
         if (!cancelled) setLoading(false);
       }

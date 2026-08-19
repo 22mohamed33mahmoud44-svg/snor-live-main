@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
 import type { SettingsPanelProps } from '../types';
+import { logError } from '../utils/logError';
 import { LogoutIcon } from './icons/Icons';
 import { useSettings } from '../context/SettingsContext';
 import { motion, PanInfo, AnimatePresence } from 'framer-motion';
@@ -120,10 +121,17 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
           .eq('id', myProfile.id)
           .maybeSingle();
 
-        if (data && !error) {
+        if (error) {
+          logError('SettingsPanel.fetchUserStats', error);
+          return;
+        }
+
+        if (data) {
           setStats({ minutes: data.stream_minutes || 0, visits: data.profile_visits || 0, followers: data.followers_count || 0 });
         }
-      } catch (err) { console.warn("Stats fetch error:", err); }
+      } catch (err) {
+        logError('SettingsPanel.fetchUserStats', err);
+      }
     };
     fetchUserStats();
   }, [myProfile?.id]);
@@ -138,14 +146,17 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
     // 2. حفظ في الـ LocalStorage لضمان بقائها حتى لو قفل التطبيق
     localStorage.setItem(`snor_setting_${key}`, JSON.stringify(newValue));
     
-    // 3. تحديث صامت في قاعدة البيانات دون ملامسة جلسة الـ Auth العنيفة
+    // 3. تحديث في قاعدة البيانات دون ملامسة جلسة الـ Auth العنيفة
     try {
-      await supabase
+      // supabase لا يرمي استثناءً عند فشل الاستعلام، لذلك نفحص error صريحاً
+      const { error } = await supabase
         .from('profiles')
         .update({ [key]: newValue })
         .eq('id', myProfile?.id);
+
+      if (error) logError('SettingsPanel.saveSetting', error);
     } catch (error) {
-      console.warn("حفظ السيرفر الاختياري");
+      logError('SettingsPanel.saveSetting', error);
     }
   };
 

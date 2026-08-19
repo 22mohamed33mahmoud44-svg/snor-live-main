@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../supabase';
+import { logError } from '../utils/logError';
 
 // ── Types ────────────────────────────────────────────────────────
 export interface UserSettings {
@@ -40,7 +41,8 @@ export const SettingsProvider = ({ children, userId }: { children: React.ReactNo
     try {
       const localSettings = localStorage.getItem('user_app_settings');
       return localSettings ? JSON.parse(localSettings) : defaultSettings;
-    } catch {
+    } catch (error) {
+      logError('SettingsProvider.readLocalSettings', error);
       return defaultSettings;
     }
   });
@@ -60,9 +62,8 @@ export const SettingsProvider = ({ children, userId }: { children: React.ReactNo
           .eq('id', userId)
           .single();
 
-        // تم استخدام المتغير error هنا لحل التحذير
         if (error) {
-          console.error("حدث خطأ أثناء جلب الإعدادات:", error);
+          logError('SettingsProvider.fetchSettings', error);
         }
 
         if (data?.settings) {
@@ -70,9 +71,8 @@ export const SettingsProvider = ({ children, userId }: { children: React.ReactNo
           setSettings(mergedSettings);
           localStorage.setItem('user_app_settings', JSON.stringify(mergedSettings));
         }
-      } catch {
-        // تم إزالة متغير الخطأ من هنا لأنه لم يكن مستخدماً
-        console.error('فشل في عملية الاتصال لجلب الإعدادات');
+      } catch (error) {
+        logError('SettingsProvider.fetchSettings', error);
       } finally {
         setIsLoading(false);
       }
@@ -112,12 +112,15 @@ export const SettingsProvider = ({ children, userId }: { children: React.ReactNo
     // المزامنة مع Supabase في الخلفية
     if (userId) {
       try {
-        await supabase
+        // supabase لا يرمي استثناءً عند فشل الاستعلام، لذلك نفحص error صريحاً
+        const { error } = await supabase
           .from('profiles')
           .update({ settings: newSettings })
           .eq('id', userId);
-      } catch {
-        console.error('فشل مزامنة الإعداد مع الخادم');
+
+        if (error) logError('SettingsProvider.syncSetting', error);
+      } catch (error) {
+        logError('SettingsProvider.syncSetting', error);
       }
     }
   };

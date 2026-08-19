@@ -64,11 +64,16 @@ serve(async (req) => {
       }
     } else if (UUID_RE.test(room)) {
       // أ) غرفة ماتش عشوائي: يجب أن يكون المستخدم أحد الطرفين
-      const { data: match } = await admin
+      const { data: match, error: matchError } = await admin
         .from('matches')
         .select('id, user1, user2, status')
         .eq('id', room)
         .maybeSingle();
+
+      if (matchError) {
+        console.error('Failed to look up match room:', matchError);
+        return json({ error: 'Internal Server Error' }, 500);
+      }
 
       if (match) {
         if ((match.user1 === user.id || match.user2 === user.id) && match.status !== 'ended') {
@@ -77,11 +82,16 @@ serve(async (req) => {
         }
       } else {
         // ب) غرفة بث مباشر: المالك فقط يبث، والباقي مشاهدة فقط
-        const { data: stream } = await admin
+        const { data: stream, error: streamError } = await admin
           .from('live_streams')
           .select('id, user_id, is_live')
           .eq('id', room)
           .maybeSingle();
+
+        if (streamError) {
+          console.error('Failed to look up live stream room:', streamError);
+          return json({ error: 'Internal Server Error' }, 500);
+        }
 
         if (stream) {
           if (stream.user_id === user.id) {
@@ -101,11 +111,16 @@ serve(async (req) => {
     }
 
     // ── 3. جلب اسم العرض من قاعدة البيانات (وليس من العميل) ──
-    const { data: profile } = await admin
+    const { data: profile, error: profileError } = await admin
       .from('profiles')
       .select('username')
       .eq('id', user.id)
       .maybeSingle();
+
+    // غير قاتل: نكمل باسم افتراضي لكن نسجل الخطأ
+    if (profileError) {
+      console.error('Failed to load display name:', profileError);
+    }
 
     const displayName =
       profile?.username || user.user_metadata?.full_name || 'مستخدم سنور';

@@ -95,7 +95,12 @@ serve(async (req) => {
         .eq("id", userId)
         .maybeSingle();
 
-      if (error || !data) {
+      if (error) {
+        console.error(`User validation lookup failed for ${userId}:`, error);
+        return json({ error: { code: "INVALID_USER", description: "User lookup failed" } }, 500);
+      }
+
+      if (!data) {
         console.warn(`User not found: ${userId}`);
         return json({ error: { code: "INVALID_USER", description: "User not found" } }, 400);
       }
@@ -156,7 +161,11 @@ serve(async (req) => {
       if (coinsErr) {
         console.error("Failed to credit coins — rolling back transaction record:", coinsErr);
         // نحذف سجل المعاملة حتى تنجح إعادة المحاولة القادمة من Xsolla
-        await supabase.from("transactions").delete().eq("id", txnRow.id);
+        const { error: rollbackErr } = await supabase.from("transactions").delete().eq("id", txnRow.id);
+        if (rollbackErr) {
+          // خطير: المعاملة مسجلة كناجحة بلا كوينز — إعادة محاولة Xsolla هتتجاهل كمكرر
+          console.error(`Rollback failed for txn ${transactionId} — manual reconciliation required:`, rollbackErr);
+        }
         return json({ error: "Failed to add coins" }, 500);
       }
 

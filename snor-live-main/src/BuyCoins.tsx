@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./supabase";
+import { logError } from "./utils/logError";
 
 const PACKAGES = [
   { id: "pkg_100", coins: 100, price: 10, label: "البداية", emoji: "⚡", color: "#6366f1", popular: false },
@@ -89,8 +90,9 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
       if (XPayStationWidget?.off && widgetCloseHandlerRef.current) {
         try {
           XPayStationWidget.off("close", widgetCloseHandlerRef.current);
-        } catch {
-          /* الـ widget قد يكون اتشال بالفعل */
+        } catch (error) {
+          // الـ widget قد يكون اتشال بالفعل
+          logError('BuyCoins.detachWidgetCloseHandler', error);
         }
       }
       closeHandlerAttachedRef.current = false;
@@ -101,11 +103,13 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
   // جلب الـ ID الخاص بالمستخدم الحالي + تحميل مسبق للـ script
   useEffect(() => {
     let cancelled = false;
-    supabase.auth.getUser().then(({ data }) => {
+    supabase.auth.getUser().then(({ data, error }) => {
+      if (error) logError('BuyCoins.getUser', error);
       if (!cancelled) setUserId(data.user?.id || null);
     });
-    loadXsollaScript().catch(() => {
-      /* تحميل مسبق فقط — الخطأ الفعلي يُعالج داخل handleBuy */
+    loadXsollaScript().catch(error => {
+      // تحميل مسبق فقط — الخطأ الفعلي يُعالج داخل handleBuy
+      logError('BuyCoins.preloadXsollaScript', error);
     });
     return () => {
       cancelled = true;

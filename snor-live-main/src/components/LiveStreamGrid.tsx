@@ -2,6 +2,7 @@ import  { useState, useEffect, memo, useCallback } from 'react';
 import { supabase } from '../supabase'; 
 import { Users, Heart, Tv } from 'lucide-react';
 import ViewerLiveRoom from './ViewerLiveRoom'; 
+import { logError } from '../utils/logError';
 
 interface StreamItem {
   id: string; 
@@ -83,12 +84,14 @@ export default function LiveStreamGrid() {
   const [streams, setStreams] = useState<StreamItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [activeStream, setActiveStream] = useState<StreamItem | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [myUserId, setMyUserId] = useState<string>("");
   const [myUsername, setMyUsername] = useState<string>("متابع نشط");
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
+    supabase.auth.getUser().then(({ data, error }) => {
+      if (error) logError('LiveStreamGrid.getUser', error);
       if (data?.user) {
         setMyUserId(data.user.id);
         setMyUsername(data.user.user_metadata?.username || data.user.email?.split('@')[0] || "متابع");
@@ -104,6 +107,7 @@ export default function LiveStreamGrid() {
     const fetchLiveStreams = async () => {
       try {
         setLoading(true);
+        setLoadError(null);
         const { data, error } = await supabase
           .from('live_streams')
           .select('*')
@@ -128,7 +132,8 @@ export default function LiveStreamGrid() {
           setStreams(mappedStreams);
         }
       } catch (err) {
-        console.error("خطأ في تحميل البثوث المباشرة:", err);
+        logError('LiveStreamGrid.fetchLiveStreams', err);
+        setLoadError('تعذر تحميل البثوث المباشرة، تحقق من اتصالك وحاول مرة أخرى');
       } finally {
         setLoading(false);
       }
@@ -207,6 +212,16 @@ export default function LiveStreamGrid() {
             </div>
           </div>
         ))}
+      </div>
+    );
+  }
+
+  // خطأ التحميل يُعرض منفصلاً عن حالة "لا توجد بثوث"
+  if (loadError && streams.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center p-10 text-center bg-red-500/5 rounded-3xl border border-red-500/20 mx-2 mt-4 shadow-lg">
+        <h4 className="text-white font-bold mb-1">تعذر تحميل البثوث</h4>
+        <p className="text-red-300/70 text-sm">{loadError}</p>
       </div>
     );
   }

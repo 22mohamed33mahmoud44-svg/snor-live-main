@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { logError } from './utils/logError';
 
 // ── Types ─────────────────────────────────────────────────────────
 export interface Match {
@@ -49,6 +50,8 @@ export const cancelMatching = async (userId: string): Promise<void> => {
     .rpc('cancel_waiting', { p_user_id: userId });
 
   if (error) {
-    // non-fatal — waiting_users row will be cleaned up later
+    // non-fatal — waiting_users row will be cleaned up later,
+    // لكن لا نتجاهل الخطأ بصمت حتى يظهر في السجلات
+    logError('cancelMatching', error);
   }
 };

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../../supabase'; // تأكد من صحة مسار ملف سيرفر Supabase الخاص بك
+import { logError } from '../../utils/logError';
 import { motion, AnimatePresence } from 'framer-motion';
 // تم إزالة الأيقونة 'X' غير المستخدمة لتنظيف الكود
 import { Heart, Users, Gift, Sparkles } from 'lucide-react';
@@ -125,7 +126,7 @@ export default function ViewerLiveRoom({
         }
       } catch (err: any) {
         if (!isCancelled) {
-          console.error('LiveKit Token Fetch Error:', err);
+          logError('ViewerLiveRoom.fetchLiveKitToken', err);
           showToast(err.message || 'فشل الاتصال بسيرفر البث الرئيسي');
         }
       }
@@ -187,6 +188,7 @@ export default function ViewerLiveRoom({
         .limit(MESSAGES_LIMIT);
 
       if (error) {
+        logError('ViewerLiveRoom.fetchOldMessages', error);
         if (isMounted) showToast('تعذر تحميل الرسائل القديمة');
         return;
       }
@@ -246,7 +248,8 @@ export default function ViewerLiveRoom({
         }
       });
 
-    supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data }) => {
+    supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data, error }) => {
+      if (error) logError('ViewerLiveRoom.loadLikesCount', error);
       if (isMounted && data?.likes_count != null) setLikesCount(data.likes_count);
     });
 
@@ -281,7 +284,9 @@ export default function ViewerLiveRoom({
         });
 
         if (error) {
-           console.error("فشل إرسال الإعجابات:", error);
+          // إعادة الدفعة للعداد حتى لا تضيع الإعجابات مع أول فشل شبكة
+          pendingLikesRef.current += likesToSend;
+          logError('ViewerLiveRoom.flushLikes', error);
         }
       }
     };
@@ -298,12 +303,14 @@ export default function ViewerLiveRoom({
   // جلب رصيد الجواهر والمتابعة
   useEffect(() => {
     let isMounted = true;
-    supabase.from('users_coins').select('coins').eq('user_id', myUserId).maybeSingle().then(({ data }) => {
+    supabase.from('users_coins').select('coins').eq('user_id', myUserId).maybeSingle().then(({ data, error }) => {
+      if (error) logError('ViewerLiveRoom.loadCoins', error);
       if (isMounted) setGemsBalance(data?.coins ?? 0);
     });
 
     if (streamerId && streamerId !== myUserId) {
-      supabase.from('follows').select('id').eq('follower_id', myUserId).eq('following_id', streamerId).maybeSingle().then(({ data }) => {
+      supabase.from('follows').select('id').eq('follower_id', myUserId).eq('following_id', streamerId).maybeSingle().then(({ data, error }) => {
+        if (error) logError('ViewerLiveRoom.loadFollowState', error);
         if (isMounted) setIsFollowing(!!data);
       });
     }
@@ -329,6 +336,7 @@ export default function ViewerLiveRoom({
 
     setSending(false);
     if (error) {
+      logError('ViewerLiveRoom.sendMessage', error);
       showToast('فشل إرسال الرسالة');
       setMessages(prev => prev.filter(m => m.id !== localId));
       setNewMessage(text);
@@ -367,7 +375,7 @@ export default function ViewerLiveRoom({
         showToast(`تمت متابعة ${streamerName}`);
       }
     } catch (error) {
-      // التراجع عن التغيير بصمت لو حدث خطأ في الاتصال
+      logError('ViewerLiveRoom.toggleFollow', error);
       setIsFollowing(previousIsFollowing);
       showToast('فشلت المتابعة، يرجى التأكد من اتصالك بالإنترنت');
     } finally {
@@ -392,9 +400,11 @@ export default function ViewerLiveRoom({
           type: 'broadcast', event: 'gift', payload: { senderName: myUsername || 'متابع', emoji: gift.emoji, giftName: gift.name }
         });
       } else {
+        logError('ViewerLiveRoom.sendGift', error ?? new Error('send_gift_safe returned success=false'));
         showToast('فشلت العملية، تحقق من الرصيد');
       }
     } catch (err) {
+      logError('ViewerLiveRoom.sendGift', err);
       showToast('حدث خطأ غير متوقع');
     }
   };

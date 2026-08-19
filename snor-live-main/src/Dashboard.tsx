@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { supabase } from './supabase';
+import { logError } from './utils/logError';
 
 // ── Components ──────────────────────────────────────────────────
 import { CoinsBalance } from './components/CoinsBalance';
@@ -53,7 +54,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       ]).select().single();
 
     if (error) {
-      console.error("خطأ في تسجيل البث:", error);
+      logError('Dashboard.launchLiveStream', error);
       alert("حدث خطأ أثناء الاتصال بالخادم. تأكد من جودة الإنترنت وحاول مجدداً.");
       return;
     }
@@ -63,7 +64,8 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   };
 
   useEffect(() => {
-    supabase.from('profiles').select('*').eq('id', userId).single().then(({ data }) => {
+    supabase.from('profiles').select('*').eq('id', userId).single().then(({ data, error }) => {
+      if (error) logError('Dashboard.fetchMyProfile', error);
       if (data) setMyProfile(data);
     });
   }, [userId]);
@@ -80,7 +82,8 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     return (
       <ActiveLiveRoom streamId={activeLiveStream.id} title={activeLiveStream.title} filterId={activeLiveStream.filterId} initialStream={activeLiveStream.stream} myUserId={userId} myUsername={myProfile?.full_name || "مستضيف البث"}
         onEndStream={async () => {
-          await supabase.from('live_streams').update({ is_live: false }).eq('id', activeLiveStream.id);
+          const { error } = await supabase.from('live_streams').update({ is_live: false }).eq('id', activeLiveStream.id);
+          if (error) logError('Dashboard.endLiveStream', error);
           setActiveLiveStream(null);
         }} 
       />
@@ -211,13 +214,23 @@ const MatchTab = memo(({ onStartRandomMatch }: { onStartRandomMatch: () => void 
 const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string, onOpenChat: (p: any) => void, onUnreadUpdate: (u: number) => void }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [conversations, setConversations] = useState<ConvUser[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 🚀 السحب الخارق للأداء باستخدام الدالة (RPC) الجديدة
   const fetchConversations = useCallback(async () => {
     const { data: convStats, error } = await supabase.rpc('get_user_conversations', { p_user_id: userId });
 
-    if (error || !convStats || convStats.length === 0) {
+    // فشل الـ RPC ليس مثل "لا توجد محادثات" — نميز بينهما في الواجهة
+    if (error) {
+      logError('Dashboard.fetchConversations', error);
+      setLoadFailed(true);
+      return;
+    }
+
+    setLoadFailed(false);
+
+    if (!convStats || convStats.length === 0) {
       setConversations([]);
       onUnreadUpdate(0);
       return;
@@ -225,7 +238,13 @@ const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string,
 
     const partnerIds = convStats.map((c: any) => c.partner_id);
     // H4: قراءة بيانات المستخدمين الآخرين تتم عبر view الأعمدة الآمنة فقط
-    const { data: profiles } = await supabase.from('public_profiles').select('id, username, full_name, avatar_url, gender').in('id', partnerIds);
+    const { data: profiles, error: profilesError } = await supabase.from('public_profiles').select('id, username, full_name, avatar_url, gender').in('id', partnerIds);
+
+    if (profilesError) {
+      logError('Dashboard.fetchConversationProfiles', profilesError);
+      setLoadFailed(true);
+      return;
+    }
 
     if (profiles) {
       const convList: ConvUser[] = profiles.map(p => {
@@ -279,7 +298,12 @@ const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string,
         </div>
       </div>
       <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {conversations.length === 0 && (
+        {loadFailed && (
+          <div style={{ textAlign: 'center', padding: '16px 20px', color: '#f87171', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 14, fontSize: '0.8rem' }}>
+            تعذر تحميل المحادثات — تحقق من اتصالك
+          </div>
+        )}
+        {!loadFailed && conversations.length === 0 && (
           <div style={{ textAlign: 'center', padding: '80px 20px', color: 'rgba(255,255,255,.2)' }}>
             <div style={{ fontSize: '3rem', marginBottom: 12 }}>💬</div>
             صندوق الرسائل فارغ حالياً.

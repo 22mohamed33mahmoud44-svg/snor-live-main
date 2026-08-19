@@ -38,6 +38,8 @@ serve(async (req) => {
   const turnCredential = Deno.env.get('TURN_CREDENTIAL');
 
   if (!turnUrl || !turnUsername || !turnCredential) {
+    // العميل هيرجع لـ STUN فقط — نسجل السبب لأنه إعداد ناقص في البيئة
+    console.warn('TURN credentials are not configured — returning empty iceServers.');
     return new Response(JSON.stringify({ iceServers: [] }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from './supabase';
+import { logError } from './utils/logError';
 // Assuming a translation hook or prop exists, e.g. from a context
 // For this example, we'll imagine a `t` object with strings is available.
 
@@ -71,6 +72,7 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
 
     } catch (error: any) {
       // 4. اصطياد أي خطأ في الرفع أو قاعدة البيانات وعرضه للمستخدم
+      logError('CompleteProfile.submit', error);
       setMessage(error.message || 'حدث خطأ غير متوقع أثناء الحفظ.');
     } finally {
       // 5. إيقاف التحميل دائماً، سواء نجحت أو فشلت العملية

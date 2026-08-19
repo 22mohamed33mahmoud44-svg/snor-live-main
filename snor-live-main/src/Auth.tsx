@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from './supabase';
+import { logError } from './utils/logError';
 
 interface AuthProps {
   isOpen: boolean;
@@ -27,16 +28,24 @@ export default function Auth({ isOpen, onClose }: AuthProps) {
       ? await supabase.auth.signUp({ email, password })
       : await supabase.auth.signInWithPassword({ email, password });
 
-    if (error) setMessage(error.message);
-    else onClose();
+    if (error) {
+      logError('Auth.emailAuth', error);
+      setMessage(error.message);
+    } else onClose();
     setLoading(false);
   };
 
   const handleGoogleLogin = async () => {
-    await supabase.auth.signInWithOAuth({
+    setMessage('');
+    const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: window.location.origin },
     });
+
+    if (error) {
+      logError('Auth.googleLogin', error);
+      setMessage('تعذر الدخول بحساب Google، حاول مرة أخرى');
+    }
   };
 
   return (

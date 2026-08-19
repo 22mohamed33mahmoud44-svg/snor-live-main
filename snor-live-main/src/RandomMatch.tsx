@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from './supabase';
 import { startMatching, cancelMatching, type Match } from './match';
+import { logError } from './utils/logError';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type Props = {
@@ -88,7 +89,8 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
     matchedRef.current = true;
 
     stopSearchResources();
-    successAudioRef.current?.play().catch(() => {});
+    // منع التشغيل التلقائي من المتصفح لا يعني فشل المطابقة
+    successAudioRef.current?.play().catch(error => logError('RandomMatch.successSound', error));
     setPhaseSafe('matched');
 
     // ⏱️ مؤقت الاحتفال يُحفظ في مرجع ليُلغى عند إغلاق الشاشة
@@ -101,7 +103,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
   const checkExistingMatch = useCallback(async () => {
     if (matchedRef.current) return;
     const cutoff = new Date(Date.now() - RECENT_MATCH_WINDOW_MS).toISOString();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('matches')
       .select('id, user1, user2, status, created_at')
       .eq('status', 'active')
@@ -110,6 +112,12 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+
+    // فشل الفحص الاحتياطي غير قاتل — القناة اللحطية والمحاولة التالية يغطيانه
+    if (error) {
+      logError('RandomMatch.checkExistingMatch', error);
+      return;
+    }
 
     if (data && !matchedRef.current) {
       handleMatchFound(data as Match);
@@ -124,7 +132,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
 
     matchedRef.current = false;
     setPhaseSafe('waiting');
-    radarAudioRef.current?.play().catch(() => {});
+    radarAudioRef.current?.play().catch(error => logError('RandomMatch.radarSound', error));
 
     try {
       // 1️⃣ الاشتراك في القناة *أولاً* وانتظار تأكيد SUBSCRIBED
@@ -164,10 +172,11 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
      if ((phaseRef.current as string) === 'waiting') {
         pollTimer.current = setInterval(checkExistingMatch, POLL_INTERVAL_MS);
       }
-    } catch {
+    } catch (e) {
+      logError('RandomMatch.handleStart', e);
       stopSearchResources();
       // لا نترك صف انتظار معلقاً لو الـ RPC نجحت ثم فشل شيء آخر
-      cancelMatching(userId).catch(() => {});
+      cancelMatching(userId).catch(error => logError('RandomMatch.cancelAfterFailure', error));
       setPhaseSafe('error');
     } finally {
       startingRef.current = false;
@@ -186,7 +195,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
     // صف الانتظار. لو وُجدت مباراة نشطة حديثة، ننهيها ونرسل إشارة end
     // حتى لا يبقى الطرف الآخر معلقاً في مكالمة فارغة.
     const cutoff = new Date(Date.now() - RECENT_MATCH_WINDOW_MS).toISOString();
-    const { data: strayMatch } = await supabase
+    const { data: strayMatch, error: strayError } = await supabase
       .from('matches')
       .select('id')
       .eq('status', 'active')
@@ -196,9 +205,13 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       .limit(1)
       .maybeSingle();
 
+    if (strayError) logError('RandomMatch.findStrayMatch', strayError);
+
     if (strayMatch && !matchedRef.current) {
-      await supabase.from('matches').update({ status: 'ended' }).eq('id', strayMatch.id);
-      await supabase.from('signals').insert({ match_id: strayMatch.id, type: 'end', data: {}, sender: userId });
+      const { error: endError } = await supabase.from('matches').update({ status: 'ended' }).eq('id', strayMatch.id);
+      if (endError) logError('RandomMatch.endStrayMatch', endError);
+      const { error: signalError } = await supabase.from('signals').insert({ match_id: strayMatch.id, type: 'end', data: {}, sender: userId });
+      if (signalError) logError('RandomMatch.signalStrayMatch', signalError);
     }
 
     setPhaseSafe('idle');
@@ -211,7 +224,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       if (pollTimer.current) clearInterval(pollTimer.current);
       if (channelRef.current) supabase.removeChannel(channelRef.current);
       if (phaseRef.current === 'waiting') {
-        cancelMatching(userIdRef.current).catch(() => {});
+        cancelMatching(userIdRef.current).catch(error => logError('RandomMatch.cancelOnUnmount', error));
       }
     };
   }, []);

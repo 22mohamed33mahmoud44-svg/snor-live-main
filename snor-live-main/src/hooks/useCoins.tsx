@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "../supabase";
+import { logError } from "../utils/logError";
 
 export function useCoins() {
   const [coins, setCoins] = useState<number>(0);
@@ -16,7 +17,11 @@ export function useCoins() {
       .select("coins")
       .eq("user_id", userId)
       .maybeSingle();
-    if (!error && data && typeof data.coins === "number") {
+    if (error) {
+      logError("useCoins.refresh", error);
+      return;
+    }
+    if (data && typeof data.coins === "number") {
       setCoins(data.coins);
     }
   }, []);
@@ -35,11 +40,10 @@ export function useCoins() {
     };
 
     const init = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
 
       if (cancelled) return;
+      if (userError) logError("useCoins.getUser", userError);
       if (!user) {
         userIdRef.current = null;
         setCoins(0);

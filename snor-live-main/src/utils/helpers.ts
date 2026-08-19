@@ -1,6 +1,7 @@
 // ── Helper Functions ─────────────────────────────────────────────
 
 import type { Profile } from '../types';
+import { logError } from './logError';
 
 export const timeAgo = (iso: string): string => {
   const diff = Date.now() - new Date(iso).getTime();
@@ -45,7 +46,8 @@ export const playRadarSound = () => {
       osc2.start();
       osc2.stop(ctx.currentTime + 0.3);
     }, 110);
-  } catch {
-    // non-fatal
+  } catch (error) {
+    // non-fatal: المتصفح قد يمنع تشغيل الصوت قبل تفاعل المستخدم
+    logError('playRadarSound', error);
   }
 };

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from './supabase';
+import { logError } from './utils/logError';
 import { LiveKitRoom, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
@@ -52,7 +53,7 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
         if (reqError || !data?.token) throw reqError ?? new Error('LiveKit token was not returned');
         if (isMounted) setToken(data.token);
       } catch (err) {
-        console.error('LiveKit token request failed:', err);
+        logError('VideoCall.fetchToken', err);
         if (isMounted) setError('connection_failed');
       } finally {
         if (isMounted) setTokenLoading(false);
@@ -92,6 +93,7 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
   const [showChat, setShowChat] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [newMsg, setNewMsg] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sfxRef = useRef<HTMLAudioElement | null>(null);
@@ -104,7 +106,7 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
   const isConnected = connectionState === ConnectionState.Connected;
   const remoteTracks = useTracks([Track.Source.Camera]).filter(t => !t.participant.isLocal);
   const localTracks = useTracks([Track.Source.Camera]).filter(t => t.participant.isLocal);
-  const playSFX = useCallback((src: string, loop = false) => { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } const audio = new Audio(src); audio.loop = loop; audio.volume = 0.4; audio.play().catch(() => {}); sfxRef.current = audio; }, []);
+  const playSFX = useCallback((src: string, loop = false) => { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } const audio = new Audio(src); audio.loop = loop; audio.volume = 0.4; audio.play().catch(error => logError('VideoCall.playSFX', error)); sfxRef.current = audio; }, []);
   const stopSFX = useCallback(() => { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } }, []);
   const resetControlsTimer = useCallback(() => { setShowControls(true); if (controlsTimer.current) clearTimeout(controlsTimer.current); controlsTimer.current = setTimeout(() => { if (!showChatRef.current) setShowControls(false); }, 5000); }, []);
   useEffect(() => { if (!isConnected) playSFX(SFX_CONNECTING, true); else stopSFX(); return () => stopSFX(); }, [isConnected, playSFX, stopSFX]);
@@ -116,15 +118,42 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
     const channelName = `vc-chat-sig-${matchId}`;
     const channel = supabase.channel(channelName)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` }, payload => { const incoming = payload.new as { id: string; sender_id: string; message: string }; setMessages(prev => (prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming])); if (incoming.sender_id !== userId) setNewMsg(true); })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` }, payload => { const msg = payload.new as any; if (msg.sender !== userId && msg.type === 'end') { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } const audio = new Audio(SFX_END); audio.volume = 0.4; audio.play().catch(() => {}); sfxRef.current = audio; onEndRef.current(); } })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` }, payload => { const msg = payload.new as any; if (msg.sender !== userId && msg.type === 'end') { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } const audio = new Audio(SFX_END); audio.volume = 0.4; audio.play().catch(error => logError('VideoCall.playEndSFX', error)); sfxRef.current = audio; onEndRef.current(); } })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [matchId, userId]);
-  const triggerEndMatch = async (action: 'next' | 'end') => { if (endingRef.current) return; endingRef.current = true; playSFX(SFX_END); try { await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId); await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId }); } finally { action === 'next' ? onNext() : onEnd(); } };
-  const sendMessage = async () => { const text = input.trim(); if (!text) return; setInput(''); const { error } = await supabase.from('messages').insert({ match_id: matchId, sender_id: userId, message: text }); if (error) console.error('Message send failed:', error); };
+  const triggerEndMatch = async (action: 'next' | 'end') => {
+    if (endingRef.current) return;
+    endingRef.current = true;
+    playSFX(SFX_END);
+    try {
+      const { error: matchError } = await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId);
+      if (matchError) logError('VideoCall.endMatch.updateMatch', matchError);
+      const { error: signalError } = await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId });
+      // فشل إشارة الإنهاء يعني أن الطرف الآخر لن يُخطر وسيعتمد على انقطاع LiveKit
+      if (signalError) logError('VideoCall.endMatch.sendSignal', signalError);
+    } catch (e) {
+      logError('VideoCall.endMatch', e);
+    } finally {
+      if (action === 'next') onNext();
+      else onEnd();
+    }
+  };
+  const sendMessage = async () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    setChatError(null);
+    const { error } = await supabase.from('messages').insert({ match_id: matchId, sender_id: userId, message: text });
+    if (error) {
+      logError('VideoCall.sendMessage', error);
+      setInput(text);
+      setChatError('لم يتم إرسال الرسالة، حاول مرة أخرى');
+    }
+  };
   const openChat = () => { setShowChat(true); setNewMsg(false); setShowControls(true); };
   const closeChat = () => { setShowChat(false); resetControlsTimer(); };
-  return <div className="vc-app-container" onClick={resetControlsTimer}><style>{STYLES}</style>{remoteTracks.length > 0 && remoteTracks[0].publication.track ? <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" /> : <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><div className="vc-radar-pulse pulse-3" /><span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span></div>}<div className="vc-shading-top" /><div className="vc-shading-bottom" /><div className="vc-pip-container">{localTracks.length > 0 && localTracks[0].publication.track ? <VideoTrack trackRef={localTracks[0]} className="vc-pip-core-video" style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} /> : null}{camOff && <div className="vc-pip-camera-blind"><VideoOffIcon /></div>}</div><div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}><div className="vc-status-badge"><span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} /><span className="vc-live-timer">{isConnected ? fmt(duration) : 'إشارة معلقة'}</span></div></div>{showChat && <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}><div className="vc-chat-top-header"><span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span><button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button></div><div className="vc-chat-scroller">{messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}{messages.map((msg, i) => <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}><div className="vc-bubble-text">{msg.message}</div></div>)}<div ref={messagesEndRef} /></div><div className="vc-chat-footer-composer"><input className="vc-chat-native-input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && sendMessage()} placeholder="اكتب رسالة سريعة للطرف الآخر..."/><button type="button" className="vc-chat-submit-btn" onClick={sendMessage}><SendIcon /></button></div></div>}<div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}><button type="button" className={`vc-action-pill ${muted ? 'disabled' : ''}`} onClick={() => setMuted(!muted)}><div className="vc-pill-icon-holder">{muted ? <MicOffIcon /> : <MicIcon />}</div><span className="vc-pill-caption">{muted ? 'تشغيل' : 'كتم'}</span></button><button type="button" className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onClick={() => setCamOff(!camOff)}><div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div><span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span></button><button type="button" className="vc-action-pill" onClick={() => setMirrored(m => !m)}><div className="vc-pill-icon-holder"><FlipIcon /></div><span className="vc-pill-caption">عكس</span></button><button type="button" className={`vc-action-pill ${showChat ? 'active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}><div className="vc-pill-icon-holder"><ChatIcon /></div><span className="vc-pill-caption">الشات</span>{newMsg && !showChat && <span className="vc-unread-badge-dot" />}</button><button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}><div className="vc-pill-icon-holder"><NextIcon /></div><span className="vc-pill-caption">التالي</span></button><button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}><div className="vc-pill-icon-holder"><EndIcon /></div><span className="vc-pill-caption">خروج</span></button></div></div>;
+  return <div className="vc-app-container" onClick={resetControlsTimer}><style>{STYLES}</style>{remoteTracks.length > 0 && remoteTracks[0].publication.track ? <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" /> : <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><div className="vc-radar-pulse pulse-3" /><span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span></div>}<div className="vc-shading-top" /><div className="vc-shading-bottom" /><div className="vc-pip-container">{localTracks.length > 0 && localTracks[0].publication.track ? <VideoTrack trackRef={localTracks[0]} className="vc-pip-core-video" style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} /> : null}{camOff && <div className="vc-pip-camera-blind"><VideoOffIcon /></div>}</div><div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}><div className="vc-status-badge"><span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} /><span className="vc-live-timer">{isConnected ? fmt(duration) : 'إشارة معلقة'}</span></div></div>{showChat && <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}><div className="vc-chat-top-header"><span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span><button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button></div><div className="vc-chat-scroller">{messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}{messages.map((msg, i) => <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}><div className="vc-bubble-text">{msg.message}</div></div>)}<div ref={messagesEndRef} /></div>{chatError && <p className="vc-chat-error-line">{chatError}</p>}<div className="vc-chat-footer-composer"><input className="vc-chat-native-input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && sendMessage()} placeholder="اكتب رسالة سريعة للطرف الآخر..."/><button type="button" className="vc-chat-submit-btn" onClick={sendMessage}><SendIcon /></button></div></div>}<div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}><button type="button" className={`vc-action-pill ${muted ? 'disabled' : ''}`} onClick={() => setMuted(!muted)}><div className="vc-pill-icon-holder">{muted ? <MicOffIcon /> : <MicIcon />}</div><span className="vc-pill-caption">{muted ? 'تشغيل' : 'كتم'}</span></button><button type="button" className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onClick={() => setCamOff(!camOff)}><div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div><span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span></button><button type="button" className="vc-action-pill" onClick={() => setMirrored(m => !m)}><div className="vc-pill-icon-holder"><FlipIcon /></div><span className="vc-pill-caption">عكس</span></button><button type="button" className={`vc-action-pill ${showChat ? 'active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}><div className="vc-pill-icon-holder"><ChatIcon /></div><span className="vc-pill-caption">الشات</span>{newMsg && !showChat && <span className="vc-unread-badge-dot" />}</button><button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}><div className="vc-pill-icon-holder"><NextIcon /></div><span className="vc-pill-caption">التالي</span></button><button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}><div className="vc-pill-icon-holder"><EndIcon /></div><span className="vc-pill-caption">خروج</span></button></div></div>;
 }
 
 const STYLES = `
@@ -173,6 +202,7 @@ const STYLES = `
   .vc-chat-scroller { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: none; }
   .vc-chat-scroller::-webkit-scrollbar { display: none; }
   .vc-chat-blank-state { text-align: center; color: #475569; font-size: 0.8rem; margin: auto; padding: 0 20px; }
+  .vc-chat-error-line { margin: 0; padding: 6px 16px; color: #f87171; font-size: 0.75rem; text-align: center; }
   .vc-chat-bubble-row { display: flex; width: 100%; animation: vc-bubble-fade 0.2s ease forwards; }
   @keyframes vc-bubble-fade { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
   .vc-bubble-text { max-width: 85%; font-size: 0.85rem; padding: 8px 14px; border-radius: 16px; line-height: 1.45; word-break: break-word; }

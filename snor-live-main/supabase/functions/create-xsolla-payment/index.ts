@@ -27,7 +27,8 @@ serve(async (req: Request) => {
       { global: { headers: { Authorization: req.headers.get("Authorization")! } } },
     );
 
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError) console.error("auth.getUser failed:", authError);
     if (!user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
     }
@@ -92,7 +93,8 @@ serve(async (req: Request) => {
         },
       });
 
-    if (txErr) console.warn("transactions insert warning:", txErr.message);
+    // غير قاتل: السجل النهائي يُكتب من الـ webhook، لكن لازم نشوف الفشل كاملاً
+    if (txErr) console.error("Failed to record pending transaction:", txErr);
 
     return new Response(
       JSON.stringify({ token: xsollaData.token }),

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from './supabase';
+import { logError } from './utils/logError';
 
 interface ProfileProps {
   userId: string;
@@ -19,11 +20,12 @@ export default function Profile({
 
   useEffect(() => {
     const fetchProfile = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .single();
+      if (error) logError('Profile.fetchProfile', error);
       setProfile(data);
       setLoading(false);
     };
@@ -36,7 +38,8 @@ export default function Profile({
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) logError('Profile.signOut', error);
     onLogout();
     onClose();
   };

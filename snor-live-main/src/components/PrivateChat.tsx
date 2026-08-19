@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { supabase } from '../supabase';
 import type { ChatOther, MsgItem } from '../types';
 import { timeAgo } from '../utils/helpers';
+import { logError } from '../utils/logError';
 import { PhoneIcon, VideoIcon, BackIcon, SendIcon } from './icons/Icons';
 
 interface PrivateChatProps {
@@ -42,6 +43,7 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [isOtherOnline, setIsOtherOnline] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // مرجع ثابت لحالة اتصال الطرف الآخر حتى لا يُعاد إنشاء handleSend
@@ -75,14 +77,20 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
 
     // 1. جلب الرسائل السابقة وتحديث حالتها إلى "مقروءة"
     const fetchAndReadMessages = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('messages')
         .select('*')
         .or(`and(sender_id.eq.${myId},receiver_id.eq.${other.id}),and(sender_id.eq.${other.id},receiver_id.eq.${myId})`)
         .order('created_at', { ascending: false })
         .limit(100); // 🚀 آخر 100 رسالة فقط لتسريع التحميل
 
-      if (cancelled || !data) return;
+      if (cancelled) return;
+      if (error || !data) {
+        logError('PrivateChat.fetchMessages', error ?? new Error('messages query returned no data'));
+        setLoadError(true);
+        return;
+      }
+      setLoadError(false);
       const ordered = [...data].reverse();
       setMessages(ordered);
       scrollToBottom(true);
@@ -90,7 +98,9 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
       // تحديث رسائل الطرف الآخر غير المقروءة لتصبح مقروءة
       const unreadIds = ordered.filter(m => m.receiver_id === myId && !m.read).map(m => m.id);
       if (unreadIds.length > 0) {
-        await supabase.from('messages').update({ read: true }).in('id', unreadIds);
+        // فشل علامة القراءة غير قاتل لكنه يترك عداد غير المقروء مرتفعاً
+        const { error: readError } = await supabase.from('messages').update({ read: true }).in('id', unreadIds);
+        if (readError) logError('PrivateChat.markHistoryRead', readError);
       }
     };
 
@@ -110,7 +120,10 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
           if (newMsg.sender_id !== other.id) return; // رسالة من محادثة أخرى
           upsertMessage(newMsg);
           // الشات مفتوح الآن → علّمها كمقروءة فوراً
-          supabase.from('messages').update({ read: true }).eq('id', newMsg.id).then(() => {});
+          supabase.from('messages').update({ read: true }).eq('id', newMsg.id)
+            .then(({ error: readError }) => {
+              if (readError) logError('PrivateChat.markIncomingRead', readError);
+            });
         }
       )
       // رسائلي المرسلة من جهاز آخر بنفس الحساب (مرشح sender_id على السيرفر)
@@ -160,7 +173,7 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
       .single();
 
     if (error || !data) {
-      console.error('فشل إرسال الرسالة', error);
+      logError('PrivateChat.sendMessage', error ?? new Error('message insert returned no row'));
       // ❌ لا نترك المستخدم يظن أن الرسالة وصلت: علّمها كفاشلة
       setMessages(prev => prev.map(m => m.id === tempId ? { ...m, isOptimistic: false, failed: true } : m));
       return;
@@ -248,6 +261,11 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
         ref={scrollContainerRef}
         style={{ flex: 1, overflowY: 'auto', padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 12, backgroundImage: 'radial-gradient(circle at center, rgba(124,58,237,0.03) 0%, transparent 70%)' }}
       >
+        {loadError && (
+          <div style={{ alignSelf: 'center', padding: '8px 14px', borderRadius: 14, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', color: '#f87171', fontSize: '0.75rem' }}>
+            تعذر تحميل الرسائل السابقة — تحقق من اتصالك
+          </div>
+        )}
         {messages.map((msg, i) => {
           const isMe = msg.sender_id === myId;
           const showTime = i === messages.length - 1 || messages[i + 1]?.sender_id !== msg.sender_id;

@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { supabase } from '../supabase';
+import { logError } from '../utils/logError';
 import { LiveKitRoom, useRoomContext } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 
@@ -236,7 +237,7 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const MESSAGES_LIMIT = 30;
 
 // ── LiveKit Publisher (يقوم بنشر الكاميرا بأمان) ──
-const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
+const StreamPublisher = memo(({ stream, onPublishError }: { stream: MediaStream | null; onPublishError: (message: string) => void }) => {
   const room = useRoomContext();
   
   useEffect(() => {
@@ -250,7 +251,8 @@ const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
           });
         }
       } catch (e) {
-        console.error("خطأ في نشر البث لخوادم LiveKit:", e);
+        logError('ActiveLiveRoom.publishTracks', e);
+        onPublishError('تعذر نشر البث للمشاهدين، تحقق من اتصالك وأعد المحاولة');
       }
     };
     publishTracks();
@@ -265,7 +267,7 @@ const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
         }
       });
     };
-  }, [room, stream]);
+  }, [room, stream, onPublishError]);
 
   return null;
 });
@@ -408,6 +410,7 @@ export default function ActiveLiveRoom({
   const [showEndModal, setShowEndModal]     = useState(false);
   const [cameraReady, setCameraReady]       = useState(false);
   const [liveKitToken, setLiveKitToken]     = useState<string | null>(null);
+  const [errorToast, setErrorToast]         = useState<string | null>(null);
 
   const videoRef            = useRef<HTMLVideoElement>(null);
   const streamRef           = useRef<MediaStream | null>(null);
@@ -433,9 +436,12 @@ export default function ActiveLiveRoom({
         const { data, error } = await supabase.functions.invoke('livekit-token', {
           body: { room: streamId, username: myUsername || 'المذيع', isStreamer: true }
         });
-        if (!isCancelled && data?.token) setLiveKitToken(data.token);
+        if (isCancelled) return;
+        if (error || !data?.token) throw error ?? new Error('LiveKit token was not returned');
+        setLiveKitToken(data.token);
       } catch (e) {
-        console.error("LiveKit Token error", e);
+        logError('ActiveLiveRoom.fetchToken', e);
+        if (!isCancelled) setErrorToast('تعذر الاتصال بخادم البث، المشاهدون لن يروا البث الأن');
       }
     }
     fetchToken();
@@ -445,7 +451,7 @@ export default function ActiveLiveRoom({
   // ── Heartbeat ──
   const sendHeartbeat = useCallback(async () => {
     const { error } = await supabase.rpc('update_stream_heartbeat', { p_stream_id: streamId });
-    if (error) console.warn('Heartbeat error:', error.message);
+    if (error) logError('ActiveLiveRoom.heartbeat', error);
   }, [streamId]);
 
   const startHeartbeat = useCallback(() => {
@@ -467,11 +473,14 @@ export default function ActiveLiveRoom({
   const endStreamSafely = useCallback(async () => {
     stopHeartbeat();
     streamRef.current?.getTracks().forEach(t => t.stop());
-    await supabase
+    const { error } = await supabase
       .from('live_streams')
       .update({ is_live: false, last_heartbeat_at: new Date().toISOString() })
       .eq('id', streamId)
       .eq('user_id', myUserId);
+
+    // لو فشل تحديث الصف يبقى البث معلماً كـ live في القاعدة حتى ينهيه الـ heartbeat cleanup
+    if (error) logError('ActiveLiveRoom.endStream', error);
     onEndStream();
   }, [streamId, myUserId, stopHeartbeat, onEndStream]);
 
@@ -491,7 +500,8 @@ export default function ActiveLiveRoom({
         streamRef.current = stream;
         if (videoRef.current) videoRef.current.srcObject = stream;
       }).catch(err => {
-        console.error('الكاميرا غير متاحة:', err);
+        logError('ActiveLiveRoom.getUserMedia', err);
+        setErrorToast('تعذر الوصول للكاميرا أو الميكروفون، راجع صلاحيات المتصفح');
         setCameraReady(true);
       });
     }
@@ -506,7 +516,12 @@ export default function ActiveLiveRoom({
     let wakeLock: WakeLockSentinel | null = null;
     let cancelled = false;
     const requestLock = async () => {
-      try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch { /* not supported */ }
+      try {
+        if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+      } catch (error) {
+        // غير مدعوم في بعض المتصفحات — غير مؤثر على البث
+        logError('ActiveLiveRoom.wakeLock', error);
+      }
     };
     requestLock();
     const onVisibility = () => { if (document.visibilityState === 'visible' && !cancelled) requestLock(); };
@@ -514,7 +529,7 @@ export default function ActiveLiveRoom({
     return () => {
       cancelled = true;
       document.removeEventListener('visibilitychange', onVisibility);
-      wakeLock?.release().catch(() => {});
+      wakeLock?.release().catch(error => logError('ActiveLiveRoom.wakeLockRelease', error));
     };
   }, []);
 
@@ -530,7 +545,12 @@ export default function ActiveLiveRoom({
     startHeartbeat();
 
     supabase.from('stream_chat').select('*').eq('stream_id', streamId).order('created_at', { ascending: true }).limit(MESSAGES_LIMIT)
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) {
+          logError('ActiveLiveRoom.loadChatHistory', error);
+          setErrorToast('تعذر تحميل الرسائل السابقة');
+          return;
+        }
         if (data) setChatMessages(data.map(m => ({ id: m.id, user: m.username, userId: m.user_id, text: m.message, color: m.user_id === myUserId ? '#ff2a74' : '#00d4ff' })));
       });
 
@@ -570,7 +590,8 @@ export default function ActiveLiveRoom({
         if (status === 'SUBSCRIBED') roomChannel.track({ user_id: myUserId, role: 'streamer', online_at: new Date().toISOString() });
       });
 
-    supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data }) => {
+    supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data, error }) => {
+      if (error) logError('ActiveLiveRoom.loadLikesCount', error);
       if (data?.likes_count != null) setLikesCount(data.likes_count);
     });
 
@@ -606,6 +627,12 @@ export default function ActiveLiveRoom({
     return () => clearTimeout(id);
   }, [banToast]);
 
+  useEffect(() => {
+    if (!errorToast) return;
+    const id = setTimeout(() => setErrorToast(null), 4000);
+    return () => clearTimeout(id);
+  }, [errorToast]);
+
   // ── القضاء على مشكلة الـ IDs ──
   const handleSendMessage = useCallback(async (text: string) => {
     const optimisticId = `opt-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
@@ -621,7 +648,8 @@ export default function ActiveLiveRoom({
 
     if (error) {
       setChatMessages(prev => prev.filter(m => m.id !== optimisticId));
-      console.error('فشل إرسال الرسالة:', error.message);
+      logError('ActiveLiveRoom.sendMessage', error);
+      setErrorToast('فشل إرسال الرسالة، حاول مرة أخرى');
     }
   }, [streamId, myUserId, myUsername]);
 
@@ -632,6 +660,7 @@ export default function ActiveLiveRoom({
     }
     const { data, error } = await supabase.rpc('ban_user_from_stream', { p_stream_id: streamId, p_user_id: targetUserId, p_reason: 'banned by streamer' });
     if (error || !data?.success) {
+      logError('ActiveLiveRoom.banUser', error ?? new Error('ban_user_from_stream returned success=false'));
       setBanToast('تعذر حظر المستخدم');
     } else {
       setBannedUsers(prev => new Set([...prev, targetUserId]));
@@ -675,6 +704,12 @@ export default function ActiveLiveRoom({
       {banToast && (
         <div style={styles.banToast}>
           <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 900 }}>🚫 {banToast}</span>
+        </div>
+      )}
+
+      {errorToast && (
+        <div style={styles.banToast}>
+          <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 900 }}>⚠️ {errorToast}</span>
         </div>
       )}
 
@@ -733,7 +768,7 @@ export default function ActiveLiveRoom({
   if (liveKitToken) {
     return (
       <LiveKitRoom token={liveKitToken} serverUrl={import.meta.env.VITE_LIVEKIT_URL} connect={true}>
-        <StreamPublisher stream={streamRef.current} />
+        <StreamPublisher stream={streamRef.current} onPublishError={setErrorToast} />
         {roomContent}
       </LiveKitRoom>
     );
