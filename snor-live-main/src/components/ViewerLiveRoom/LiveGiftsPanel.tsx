@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Gem, Loader2 } from 'lucide-react';
+import { vibrate } from '../../utils/haptics';
 
 // تعريف بنية الهدية
 export interface GiftDef {
@@ -49,9 +50,7 @@ export default function LiveGiftsPanel({
     if (processingGiftId !== null) return;
 
     // 2. تشغيل اهتزاز خفيف للموبايل لتأكيد الضغطة للمستخدم
-    if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
-      window.navigator.vibrate(40);
-    }
+    vibrate();
 
     // 3. قفل الواجهة على الفور
     setProcessingGiftId(gift.id);

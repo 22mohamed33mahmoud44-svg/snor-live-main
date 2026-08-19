@@ -12,8 +12,11 @@ export const timeAgo = (iso: string): string => {
   return `${Math.floor(h / 24)}ي`;
 };
 
+export const initialOf = (name?: string | null, fallback = '?'): string =>
+  (name?.trim() || fallback)[0].toUpperCase();
+
 export const initials = (p?: Profile | null): string =>
-  (p?.full_name || p?.username || '?')[0].toUpperCase();
+  initialOf(p?.full_name || p?.username);
 
 // ── دالة تشغيل تأثير نغمة الرادار الإلكترونية ──────────────────────
 export const playRadarSound = () => {

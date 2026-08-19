@@ -1,7 +1,9 @@
 import  { useState, useEffect, memo, useCallback } from 'react';
 import { supabase } from '../supabase'; 
 import { Users, Heart, Tv } from 'lucide-react';
-import ViewerLiveRoom from './ViewerLiveRoom'; 
+import ViewerLiveRoom from './ViewerLiveRoom';
+import { formatCompactNumber } from '../utils/format';
+import { initialOf } from '../utils/helpers';
 
 interface StreamItem {
   id: string; 
@@ -16,11 +18,6 @@ interface StreamItem {
 
 // ── 1. عزل بطاقة البث لمنع إعادة رسم الشبكة بالكامل ───────────────────────────
 const StreamCard = memo(({ stream, onClick }: { stream: StreamItem, onClick: () => void }) => {
-  const formatCount = (count: number) => {
-    if (count >= 1000) return (count / 1000).toFixed(1) + 'K';
-    return count.toString();
-  };
-
   return (
     <div 
       onClick={onClick}
@@ -38,7 +35,7 @@ const StreamCard = memo(({ stream, onClick }: { stream: StreamItem, onClick: () 
           />
         ) : (
           <div className="w-20 h-20 rounded-full flex items-center justify-center text-2xl font-bold bg-white/5 border border-white/10" style={{ color: stream.color }}>
-            {stream.streamer_name[0].toUpperCase()}
+            {initialOf(stream.streamer_name)}
           </div>
         )}
       </div>
@@ -58,11 +55,11 @@ const StreamCard = memo(({ stream, onClick }: { stream: StreamItem, onClick: () 
         <div className="flex justify-between items-center text-white/60 text-xs mt-3 border-t border-white/10 pt-2.5">
           <span className="flex items-center gap-1.5 font-medium">
             <Users size={12} style={{ color: stream.color }} /> 
-            {formatCount(stream.viewers_count)} من المتابعين
+            {formatCompactNumber(stream.viewers_count)} من المتابعين
           </span>
           <span className="flex items-center gap-1.5 text-pink-400 font-bold">
             <Heart size={12} className="fill-pink-500/20" /> 
-            {formatCount(stream.likes_count)}
+            {formatCompactNumber(stream.likes_count)}
           </span>
         </div>
       </div>

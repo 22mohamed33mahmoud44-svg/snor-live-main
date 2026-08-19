@@ -3,6 +3,8 @@ import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { supabase } from '../supabase';
 import { LiveKitRoom, useRoomContext } from '@livekit/components-react';
 import { Track } from 'livekit-client';
+import { useLiveKitToken } from '../hooks/useLiveKitToken';
+import { formatDuration } from '../utils/format';
 
 interface ActiveLiveRoomProps {
   streamId: string;
@@ -407,7 +409,6 @@ export default function ActiveLiveRoom({
   const [selectedMsgId, setSelectedMsgId]   = useState<string | null>(null);
   const [showEndModal, setShowEndModal]     = useState(false);
   const [cameraReady, setCameraReady]       = useState(false);
-  const [liveKitToken, setLiveKitToken]     = useState<string | null>(null);
 
   const videoRef            = useRef<HTMLVideoElement>(null);
   const streamRef           = useRef<MediaStream | null>(null);
@@ -426,21 +427,11 @@ export default function ActiveLiveRoom({
   const activeFilterEffect = filtersList.find(f => f.id === filterId)?.effect ?? 'none';
 
   // ── جلب توكن LiveKit للمذيع ──
-  useEffect(() => {
-    let isCancelled = false;
-    async function fetchToken() {
-      try {
-        const { data, error } = await supabase.functions.invoke('livekit-token', {
-          body: { room: streamId, username: myUsername || 'المذيع', isStreamer: true }
-        });
-        if (!isCancelled && data?.token) setLiveKitToken(data.token);
-      } catch (e) {
-        console.error("LiveKit Token error", e);
-      }
-    }
-    fetchToken();
-    return () => { isCancelled = true; };
-  }, [streamId, myUsername]);
+  const { token: liveKitToken } = useLiveKitToken({
+    room: streamId,
+    username: myUsername || 'المذيع',
+    isStreamer: true,
+  });
 
   // ── Heartbeat ──
   const sendHeartbeat = useCallback(async () => {
@@ -640,8 +631,6 @@ export default function ActiveLiveRoom({
     }
   }, [streamId, myUserId, bannedUsers]);
 
-  const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
-
   const roomContent = (
     <div style={styles.root}>
       <style>{globalStyles}</style>
@@ -699,7 +688,7 @@ export default function ActiveLiveRoom({
             <div style={styles.streamerAvatar}>أنت</div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>{myUsername || title}</span>
-              <span style={{ fontSize: '0.65rem', color: '#4ade80', fontWeight: 700 }}>LIVE {formatTime(uptime)}</span>
+              <span style={{ fontSize: '0.65rem', color: '#4ade80', fontWeight: 700 }}>LIVE {formatDuration(uptime)}</span>
             </div>
           </div>
           <div style={styles.statsRow}>

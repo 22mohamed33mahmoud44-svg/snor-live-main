@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { supabase } from '../supabase';
+import { uploadAvatar } from '../utils/avatarStorage';
+import { initialOf } from '../utils/helpers';
 
 interface EditProfileModalProps {
   myProfile: {
@@ -28,20 +30,9 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
       if (!e.target.files || e.target.files.length === 0) return;
       setUploading(true);
 
-      const file = e.target.files[0];
-      const fileExt = file.name.split('.').pop();
-      // تثبيت اسم الملف لعدم تراكم الصور في السيرفر
-      const filePath = `avatars/${myProfile?.id}.${fileExt}`;
+      if (!myProfile?.id) throw new Error('معرف المستخدم غير متوفر');
 
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, file, { upsert: true });
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(filePath);
+      const publicUrl = await uploadAvatar(myProfile.id, e.target.files[0]);
 
       // 🚀 إضافة Cache-Buster لإجبار الواجهة على تحديث الصورة فوراً
       setAvatarUrl(`${publicUrl}?t=${Date.now()}`);
@@ -108,7 +99,7 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
             {avatarUrl ? (
               <img src={avatarUrl} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
             ) : (
-              <span style={{ fontSize: '1.8rem', fontWeight: 800 }}>{(fullName || 'أ')[0].toUpperCase()}</span>
+              <span style={{ fontSize: '1.8rem', fontWeight: 800 }}>{initialOf(fullName, 'أ')}</span>
             )}
           </div>
           

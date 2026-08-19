@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { supabase } from '../supabase';
 import type { ChatOther, MsgItem } from '../types';
-import { timeAgo } from '../utils/helpers';
+import { initialOf, timeAgo } from '../utils/helpers';
 import { PhoneIcon, VideoIcon, BackIcon, SendIcon } from './icons/Icons';
 
 interface PrivateChatProps {
@@ -215,7 +215,7 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
         <div style={{ width: 44, height: 44, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, background: 'linear-gradient(135deg, #7c3aed, #00d4ff)', position: 'relative', flexShrink: 0 }}>
           {other.avatar_url
             ? <img src={other.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 16 }} />
-            : name[0].toUpperCase()
+            : initialOf(name)
           }
           {isOtherOnline && <div style={{ position: 'absolute', bottom: -2, right: -2, width: 14, height: 14, borderRadius: '50%', background: '#10b981', border: '3px solid #03030a' }} />}
         </div>

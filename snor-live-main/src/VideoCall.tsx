@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from './supabase';
 import { LiveKitRoom, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
+import { useLiveKitToken } from './hooks/useLiveKitToken';
+import { formatDuration } from './utils/format';
 
 type Props = {
   userId: string;
@@ -13,7 +15,6 @@ type Props = {
 
 const SFX_CONNECTING = 'https://assets.mixkit.co/active_storage/sfx/2568/2568-84.wav';
 const SFX_END = 'https://assets.mixkit.co/active_storage/sfx/2564/2564-84.wav';
-const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 type ErrorType = 'camera_denied' | 'camera_not_found' | 'connection_timeout' | 'connection_failed' | null;
 const classifyLiveKitError = (error: unknown): Exclude<ErrorType, null> => {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? '').toLowerCase();
@@ -34,37 +35,21 @@ const EndIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none
 const SendIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>;
 
 export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext }: Props) {
-  const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<ErrorType>(null);
   const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
-  const [tokenLoading, setTokenLoading] = useState(true);
   const [retryKey, setRetryKey] = useState(0);
 
-  useEffect(() => {
-    let isMounted = true;
-    setToken(null);
-    setError(null);
-    setTokenLoading(true);
-    const fetchToken = async () => {
-      try {
-        const { data, error: reqError } = await supabase.functions.invoke('livekit-token', { body: { room: matchId, username: userId, isStreamer: true } });
-        if (reqError || !data?.token) throw reqError ?? new Error('LiveKit token was not returned');
-        if (isMounted) setToken(data.token);
-      } catch (err) {
-        console.error('LiveKit token request failed:', err);
-        if (isMounted) setError('connection_failed');
-      } finally {
-        if (isMounted) setTokenLoading(false);
-      }
-    };
-    void fetchToken();
-    return () => { isMounted = false; };
-  }, [matchId, userId, retryKey]);
+  const { token, isLoading: tokenLoading } = useLiveKitToken({
+    room: matchId,
+    username: userId,
+    isStreamer: true,
+    retryKey,
+    onError: () => setError('connection_failed'),
+  });
 
   const retryConnection = () => {
     setError(null);
-    setToken(null);
     setRetryKey(key => key + 1);
   };
 
@@ -124,7 +109,7 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
   const sendMessage = async () => { const text = input.trim(); if (!text) return; setInput(''); const { error } = await supabase.from('messages').insert({ match_id: matchId, sender_id: userId, message: text }); if (error) console.error('Message send failed:', error); };
   const openChat = () => { setShowChat(true); setNewMsg(false); setShowControls(true); };
   const closeChat = () => { setShowChat(false); resetControlsTimer(); };
-  return <div className="vc-app-container" onClick={resetControlsTimer}><style>{STYLES}</style>{remoteTracks.length > 0 && remoteTracks[0].publication.track ? <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" /> : <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><div className="vc-radar-pulse pulse-3" /><span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span></div>}<div className="vc-shading-top" /><div className="vc-shading-bottom" /><div className="vc-pip-container">{localTracks.length > 0 && localTracks[0].publication.track ? <VideoTrack trackRef={localTracks[0]} className="vc-pip-core-video" style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} /> : null}{camOff && <div className="vc-pip-camera-blind"><VideoOffIcon /></div>}</div><div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}><div className="vc-status-badge"><span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} /><span className="vc-live-timer">{isConnected ? fmt(duration) : 'إشارة معلقة'}</span></div></div>{showChat && <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}><div className="vc-chat-top-header"><span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span><button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button></div><div className="vc-chat-scroller">{messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}{messages.map((msg, i) => <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}><div className="vc-bubble-text">{msg.message}</div></div>)}<div ref={messagesEndRef} /></div><div className="vc-chat-footer-composer"><input className="vc-chat-native-input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && sendMessage()} placeholder="اكتب رسالة سريعة للطرف الآخر..."/><button type="button" className="vc-chat-submit-btn" onClick={sendMessage}><SendIcon /></button></div></div>}<div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}><button type="button" className={`vc-action-pill ${muted ? 'disabled' : ''}`} onClick={() => setMuted(!muted)}><div className="vc-pill-icon-holder">{muted ? <MicOffIcon /> : <MicIcon />}</div><span className="vc-pill-caption">{muted ? 'تشغيل' : 'كتم'}</span></button><button type="button" className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onClick={() => setCamOff(!camOff)}><div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div><span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span></button><button type="button" className="vc-action-pill" onClick={() => setMirrored(m => !m)}><div className="vc-pill-icon-holder"><FlipIcon /></div><span className="vc-pill-caption">عكس</span></button><button type="button" className={`vc-action-pill ${showChat ? 'active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}><div className="vc-pill-icon-holder"><ChatIcon /></div><span className="vc-pill-caption">الشات</span>{newMsg && !showChat && <span className="vc-unread-badge-dot" />}</button><button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}><div className="vc-pill-icon-holder"><NextIcon /></div><span className="vc-pill-caption">التالي</span></button><button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}><div className="vc-pill-icon-holder"><EndIcon /></div><span className="vc-pill-caption">خروج</span></button></div></div>;
+  return <div className="vc-app-container" onClick={resetControlsTimer}><style>{STYLES}</style>{remoteTracks.length > 0 && remoteTracks[0].publication.track ? <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" /> : <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><div className="vc-radar-pulse pulse-3" /><span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span></div>}<div className="vc-shading-top" /><div className="vc-shading-bottom" /><div className="vc-pip-container">{localTracks.length > 0 && localTracks[0].publication.track ? <VideoTrack trackRef={localTracks[0]} className="vc-pip-core-video" style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} /> : null}{camOff && <div className="vc-pip-camera-blind"><VideoOffIcon /></div>}</div><div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}><div className="vc-status-badge"><span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} /><span className="vc-live-timer">{isConnected ? formatDuration(duration) : 'إشارة معلقة'}</span></div></div>{showChat && <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}><div className="vc-chat-top-header"><span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span><button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button></div><div className="vc-chat-scroller">{messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}{messages.map((msg, i) => <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}><div className="vc-bubble-text">{msg.message}</div></div>)}<div ref={messagesEndRef} /></div><div className="vc-chat-footer-composer"><input className="vc-chat-native-input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && sendMessage()} placeholder="اكتب رسالة سريعة للطرف الآخر..."/><button type="button" className="vc-chat-submit-btn" onClick={sendMessage}><SendIcon /></button></div></div>}<div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}><button type="button" className={`vc-action-pill ${muted ? 'disabled' : ''}`} onClick={() => setMuted(!muted)}><div className="vc-pill-icon-holder">{muted ? <MicOffIcon /> : <MicIcon />}</div><span className="vc-pill-caption">{muted ? 'تشغيل' : 'كتم'}</span></button><button type="button" className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onClick={() => setCamOff(!camOff)}><div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div><span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span></button><button type="button" className="vc-action-pill" onClick={() => setMirrored(m => !m)}><div className="vc-pill-icon-holder"><FlipIcon /></div><span className="vc-pill-caption">عكس</span></button><button type="button" className={`vc-action-pill ${showChat ? 'active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}><div className="vc-pill-icon-holder"><ChatIcon /></div><span className="vc-pill-caption">الشات</span>{newMsg && !showChat && <span className="vc-unread-badge-dot" />}</button><button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}><div className="vc-pill-icon-holder"><NextIcon /></div><span className="vc-pill-caption">التالي</span></button><button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}><div className="vc-pill-icon-holder"><EndIcon /></div><span className="vc-pill-caption">خروج</span></button></div></div>;
 }
 
 const STYLES = `

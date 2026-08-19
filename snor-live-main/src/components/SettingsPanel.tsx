@@ -4,13 +4,9 @@ import type { SettingsPanelProps } from '../types';
 import { LogoutIcon } from './icons/Icons';
 import { useSettings } from '../context/SettingsContext';
 import { motion, PanInfo, AnimatePresence } from 'framer-motion';
-
-// ── اهتزاز خفيف للأزرار (Haptic Feedback) للموبايل ──
-const vibrate = () => {
-  if (typeof window !== 'undefined' && navigator.vibrate) {
-    navigator.vibrate(40);
-  }
-};
+import { vibrate } from '../utils/haptics';
+import { formatCompactNumber } from '../utils/format';
+import { initialOf } from '../utils/helpers';
 
 // ── Custom Motion Toggle ─────────────────────────────────────────
 const MotionToggle = ({ checked, onChange }: { checked?: boolean; onChange?: () => void }) => (
@@ -149,8 +145,6 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
     }
   };
 
-  const formatNumber = (num: number) => num >= 1000 ? (num / 1000).toFixed(1) + 'k' : num.toString();
-
   const handleDragEnd = (_e: any, info: PanInfo) => {
     if (info.offset.y > 150 || info.velocity.y > 500) {
       vibrate();
@@ -190,7 +184,7 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
             <div style={{ width: 62, height: 62, borderRadius: 20, background: 'linear-gradient(135deg,#7c3aed,#00d4ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.6rem', fontWeight: 800, color: '#fff', flexShrink: 0, overflow: 'hidden', boxShadow: '0 4px 15px rgba(124,58,237,0.4)' }}>
               {myProfile?.avatar_url
                 ? <img src={myProfile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                : (myProfile?.full_name || 'م')[0].toUpperCase()
+                : initialOf(myProfile?.full_name, 'م')
               }
             </div>
             <div style={{ flex: 1 }}>
@@ -209,9 +203,9 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
           {/* Stats */}
           <div style={{ margin: '0 16px 24px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             {[
-              { val: formatNumber(stats.minutes), label: 'دقيقة بث',   color: '#38bdf8' },
-              { val: formatNumber(stats.visits),  label: 'زيارة الملف', color: '#c084fc' },
-              { val: formatNumber(stats.followers), label: 'متابع',     color: '#fbbf24' },
+              { val: formatCompactNumber(stats.minutes), label: 'دقيقة بث',   color: '#38bdf8' },
+              { val: formatCompactNumber(stats.visits),  label: 'زيارة الملف', color: '#c084fc' },
+              { val: formatCompactNumber(stats.followers), label: 'متابع',     color: '#fbbf24' },
             ].map(s => (
               <div key={s.label} style={{ background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 20, padding: '16px 10px', textAlign: 'center' }}>
                 <div style={{ fontSize: '1.4rem', fontWeight: 900, background: `linear-gradient(135deg,#fff,${s.color})`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.5px' }}>{s.val}</div>

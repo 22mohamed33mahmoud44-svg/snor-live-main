@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../supabase';
+import { uploadAvatar } from '../utils/avatarStorage';
 
 export interface OnboardingData {
   birthdate: string;
@@ -64,16 +65,7 @@ export function useAuth() {
         if (!blob.type.startsWith('image/')) throw new Error('Invalid image type');
         if (blob.size > 5 * 1024 * 1024) throw new Error('Image is larger than 5MB');
 
-        // Storage RLS requires the first path segment to equal auth.uid().
-        const fileName = `${userId}/avatar-${Date.now()}.jpg`;
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('avatars')
-          .upload(fileName, blob, { contentType: blob.type, upsert: true });
-
-        if (uploadError || !uploadData) throw uploadError ?? new Error('Avatar upload failed');
-
-        const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
-        avatarUrl = publicUrl;
+        avatarUrl = await uploadAvatar(userId, blob);
       } catch (error) {
         console.error('Avatar upload failed:', error);
         setProfileError('تعذر رفع صورة الملف الشخصي. يمكنك المحاولة مرة أخرى.');

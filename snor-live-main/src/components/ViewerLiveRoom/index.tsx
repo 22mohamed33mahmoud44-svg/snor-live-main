@@ -11,6 +11,7 @@ import { Track } from 'livekit-client';
 import '@livekit/components-styles';
 
 // استيراد المكونات الفرعية التي قمنا بفصلها
+import { useLiveKitToken } from '../../hooks/useLiveKitToken';
 import LiveHeader from './LiveHeader';
 import LiveChat from './LiveChat';
 import LiveGiftsPanel, { GiftDef } from './LiveGiftsPanel';
@@ -74,9 +75,6 @@ export default function ViewerLiveRoom({
   const [sparkleBurstKey, setSparkleBurstKey] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
 
-  // 🔑 حالة توكن LiveKit الجديد
-  const [liveKitToken, setLiveKitToken] = useState<string | null>(null);
-
   // مراجع لتحسين الأداء (Ref)
   const roomChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const timeoutsRef = useRef<number[]>([]);
@@ -101,42 +99,13 @@ export default function ViewerLiveRoom({
     safeTimeout(() => setToast(null), 2500);
   }, [safeTimeout]);
 
-  // 🚀 تأثير جلب توكن LiveKit من الـ Edge Function تلقائياً
-  useEffect(() => {
-    let isCancelled = false;
-
-    async function fetchLiveKitToken() {
-      try {
-        const { data, error: funcError } = await supabase.functions.invoke('livekit-token', {
-          body: {
-            room: streamId,
-            username: myUsername || 'متابع',
-            isStreamer: false
-          }
-        });
-
-        if (isCancelled) return;
-
-        if (funcError) throw funcError;
-        if (data && data.token) {
-          setLiveKitToken(data.token);
-        } else {
-          throw new Error('تعذر استلام مفتاح الاتصال بالبث');
-        }
-      } catch (err: any) {
-        if (!isCancelled) {
-          console.error('LiveKit Token Fetch Error:', err);
-          showToast(err.message || 'فشل الاتصال بسيرفر البث الرئيسي');
-        }
-      }
-    }
-
-    fetchLiveKitToken();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [streamId, myUsername, showToast]);
+  // 🚀 جلب توكن LiveKit من الـ Edge Function تلقائياً
+  const { token: liveKitToken } = useLiveKitToken({
+    room: streamId,
+    username: myUsername || 'متابع',
+    isStreamer: false,
+    onError: (err) => showToast(err instanceof Error ? err.message : 'فشل الاتصال بسيرفر البث الرئيسي'),
+  });
 
   const spawnHeart = useCallback((clientX?: number, emoji?: string) => {
     const heart: FloatingHeart = {
