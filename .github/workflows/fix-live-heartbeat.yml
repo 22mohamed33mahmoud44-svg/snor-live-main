@@ -1,0 +1,18 @@
+name: Fix Live Heartbeat
+
+# Retained as a manual diagnostic workflow only.
+# The heartbeat implementation is now maintained directly in ActiveLiveRoom.tsx.
+# This workflow intentionally performs no repository mutations.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify heartbeat implementation exists
+        run: |
+          grep -q "update_stream_heartbeat" src/components/ActiveLiveRoom.tsx
+          echo "Live heartbeat implementation is present."
