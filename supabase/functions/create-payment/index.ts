@@ -1,9 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const PAYMOB_API_KEY         = Deno.env.get("PAYMOB_API_KEY")!;
 const CARD_INTEGRATION_ID    = Number(Deno.env.get("PAYMOB_CARD_INTEGRATION_ID"));
 const WALLET_INTEGRATION_ID  = Number(Deno.env.get("PAYMOB_WALLET_INTEGRATION_ID"));
-const HMAC_SECRET            = Deno.env.get("PAYMOB_HMAC_SECRET")!;
+const PAYMOB_IFRAME_ID       = Deno.env.get("PAYMOB_IFRAME_ID") ?? "";
 
 const PACKAGES: Record<string, { coins: number; amount_cents: number }> = {
   pkg_100:  { coins: 100,  amount_cents: 1000  }, // 10 جنيه
@@ -12,8 +13,10 @@ const PACKAGES: Record<string, { coins: number; amount_cents: number }> = {
 };
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin":  "*",
+  "Access-Control-Allow-Origin":  Deno.env.get("ALLOWED_ORIGIN") ?? "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Vary": "Origin",
 };
 
 serve(async (req) => {
@@ -23,6 +26,26 @@ serve(async (req) => {
   }
 
   try {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const { packageId, paymentMethod, phone } = await req.json();
 
     const pkg = PACKAGES[packageId];
@@ -57,6 +80,7 @@ serve(async (req) => {
           description: `شحن ${pkg.coins} كوينز`,
           quantity: 1,
         }],
+        merchant_order_id: `${user.id}_${packageId}_${Date.now()}`,
       }),
     });
     const orderData = await orderRes.json();
@@ -119,16 +143,15 @@ serve(async (req) => {
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     } else {
       // Card: return iframe URL
-      const iframeId = "939515"; // استبدل بـ iframe ID بتاعك من Paymob
       return new Response(JSON.stringify({
         type: "card",
-        iframe_url: `https://accept.paymob.com/api/acceptance/iframes/${iframeId}?payment_token=${paymentKey}`,
+        iframe_url: `https://accept.paymob.com/api/acceptance/iframes/${PAYMOB_IFRAME_ID}?payment_token=${paymentKey}`,
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-  } catch (err: any) {
+  } catch (err) {
     console.error("Payment error:", err);
-    return new Response(JSON.stringify({ error: err.message || "حدث خطأ" }), {
+    return new Response(JSON.stringify({ error: "حدث خطأ أثناء إنشاء عملية الدفع" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

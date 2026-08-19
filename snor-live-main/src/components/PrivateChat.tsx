@@ -266,6 +266,7 @@ export default function PrivateChat({ myId, other, onBack, onStartCall }: Privat
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && handleSend()}
+          maxLength={2000}
           placeholder="اكتب رسالتك هنا..."
           style={{ flex: 1, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 20, padding: '12px 18px', color: '#fff', fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s', fontFamily: "'Cairo', sans-serif" }}
           onFocus={(e) => e.target.style.borderColor = 'rgba(0,212,255,0.4)'}

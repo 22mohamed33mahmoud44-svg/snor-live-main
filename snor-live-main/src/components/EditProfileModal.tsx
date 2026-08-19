@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../supabase';
+import { validateAvatarFile } from '../utils/helpers';
 
 interface EditProfileModalProps {
   myProfile: {
@@ -26,16 +27,22 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
     try {
       setErrorMsg('');
       if (!e.target.files || e.target.files.length === 0) return;
-      setUploading(true);
 
       const file = e.target.files[0];
-      const fileExt = file.name.split('.').pop();
+      const { ext, error: validationError } = validateAvatarFile(file);
+      if (!ext) {
+        setErrorMsg(validationError);
+        return;
+      }
+
+      setUploading(true);
+
       // تثبيت اسم الملف لعدم تراكم الصور في السيرفر
-      const filePath = `avatars/${myProfile?.id}.${fileExt}`;
+      const filePath = `avatars/${myProfile?.id}.${ext}`;
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, file, { contentType: file.type, upsert: true });
 
       if (uploadError) throw uploadError;
 

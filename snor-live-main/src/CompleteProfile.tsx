@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from './supabase';
+import { validateAvatarFile } from './utils/helpers';
 // Assuming a translation hook or prop exists, e.g. from a context
 // For this example, we'll imagine a `t` object with strings is available.
 
@@ -22,10 +23,16 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setAvatar(file);
-      setAvatarPreview(URL.createObjectURL(file));
+    if (!file) return;
+
+    const { ext, error } = validateAvatarFile(file);
+    if (!ext) {
+      setMessage(error);
+      return;
     }
+
+    setAvatar(file);
+    setAvatarPreview(URL.createObjectURL(file));
   };
 
   const handleSubmit = async () => {
@@ -42,11 +49,12 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
 
       // 1. رفع الصورة
       if (avatar) {
-        const fileExt = avatar.name.split('.').pop();
-        const fileName = `${userId}.${fileExt}`;
+        const { ext } = validateAvatarFile(avatar);
+        if (!ext) throw new Error('صورة غير مدعومة');
+        const fileName = `${userId}.${ext}`;
         const { error: uploadError } = await supabase.storage
           .from('avatars')
-          .upload(fileName, avatar, { upsert: true });
+          .upload(fileName, avatar, { contentType: avatar.type, upsert: true });
           
         if (uploadError) throw uploadError; // رمي الخطأ للـ catch
         

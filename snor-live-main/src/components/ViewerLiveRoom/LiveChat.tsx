@@ -101,6 +101,7 @@ export default function LiveChat({
           type="text" 
           value={newMessage} 
           onChange={e => onNewMessageChange(e.target.value)} 
+          maxLength={500}
           placeholder="شارك في البث..." 
           style={{ width: '100%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '50px', padding: '12px 40px 12px 46px', color: '#fff', fontSize: '0.85rem', outline: 'none' }} 
         />

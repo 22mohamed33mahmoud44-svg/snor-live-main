@@ -1,9 +1,22 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const HMAC_SECRET = Deno.env.get("PAYMOB_HMAC_SECRET")!;
+const HMAC_SECRET = Deno.env.get("PAYMOB_HMAC_SECRET");
 
-async function verifyHmac(data: Record<string, string>, receivedHmac: string): Promise<boolean> {
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+async function verifyHmac(
+  data: Record<string, string>,
+  receivedHmac: string,
+  secret: string,
+): Promise<boolean> {
   const keys = [
     "amount_cents", "created_at", "currency", "error_occured",
     "has_parent_transaction", "id", "integration_id", "is_3d_secure",
@@ -14,7 +27,7 @@ async function verifyHmac(data: Record<string, string>, receivedHmac: string): P
   ];
   const concatenated = keys.map(k => data[k] ?? "").join("");
   const encoder = new TextEncoder();
-  const keyData = encoder.encode(HMAC_SECRET);
+  const keyData = encoder.encode(secret);
   const msgData = encoder.encode(concatenated);
   const cryptoKey = await crypto.subtle.importKey(
     "raw", keyData, { name: "HMAC", hash: "SHA-512" }, false, ["sign"]
@@ -23,11 +36,19 @@ async function verifyHmac(data: Record<string, string>, receivedHmac: string): P
   const computed = Array.from(new Uint8Array(signature))
     .map(b => b.toString(16).padStart(2, "0"))
     .join("");
-  return computed.toLowerCase() === receivedHmac.toLowerCase();
+  return timingSafeEqual(computed.toLowerCase(), receivedHmac.toLowerCase());
 }
 
 serve(async (req) => {
   try {
+    if (!HMAC_SECRET) {
+      console.error("PAYMOB_HMAC_SECRET is not configured — rejecting all webhooks.");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     // قراءة الـ body بأمان
     let body: any = {};
     try {
@@ -42,7 +63,7 @@ serve(async (req) => {
     const obj  = body.obj ?? body ?? {};
 
     // HMAC verification
-    if (HMAC_SECRET) {
+    {
       const flatData: Record<string, string> = {
         amount_cents:           String(obj.amount_cents ?? ""),
         created_at:             String(obj.created_at ?? ""),
@@ -66,7 +87,7 @@ serve(async (req) => {
         success:                String(obj.success ?? ""),
       };
 
-      const isValid = await verifyHmac(flatData, hmac);
+      const isValid = await verifyHmac(flatData, hmac, HMAC_SECRET);
       if (!isValid) {
         console.warn("Invalid HMAC signature");
         // دايماً نرجع 200 عشان Paymob ما يعيدش المحاولة

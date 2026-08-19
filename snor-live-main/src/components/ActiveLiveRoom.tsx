@@ -352,6 +352,7 @@ const ChatInputArea = memo(({ onSendMessage }: { onSendMessage: (text: string) =
         value={chatInput}
         onChange={e => setChatInput(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && handleSubmit(e as any)}
+        maxLength={500}
         placeholder="تحدث مع المتابعين..."
         style={styles.chatInput}
       />

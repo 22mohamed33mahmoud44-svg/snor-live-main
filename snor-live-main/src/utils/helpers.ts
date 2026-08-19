@@ -15,6 +15,24 @@ export const timeAgo = (iso: string): string => {
 export const initials = (p?: Profile | null): string =>
   (p?.full_name || p?.username || '?')[0].toUpperCase();
 
+// ── التحقق من صورة الملف الشخصي قبل الرفع ─────────────────────────
+const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+const AVATAR_TYPES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+
+// Returns a safe extension derived from the MIME type. The original file name
+// is never used to build a storage path.
+export const validateAvatarFile = (file: File): { ext: string; error?: undefined } | { ext?: undefined; error: string } => {
+  const ext = AVATAR_TYPES[file.type];
+  if (!ext) return { error: 'الصور المسموح بها: JPG أو PNG أو WEBP أو GIF فقط' };
+  if (file.size > AVATAR_MAX_BYTES) return { error: 'حجم الصورة يجب أن يكون أقل من 5 ميجابايت' };
+  return { ext };
+};
+
 // ── دالة تشغيل تأثير نغمة الرادار الإلكترونية ──────────────────────
 export const playRadarSound = () => {
   try {
