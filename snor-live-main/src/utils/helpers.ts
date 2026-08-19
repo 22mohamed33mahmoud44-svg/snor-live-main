@@ -26,11 +26,11 @@ const AVATAR_TYPES: Record<string, string> = {
 
 // Returns a safe extension derived from the MIME type. The original file name
 // is never used to build a storage path.
-export const validateAvatarFile = (file: File): { ext: string; error?: undefined } | { ext?: undefined; error: string } => {
+export const validateAvatarFile = (file: File): { ext: string | null; error: string } => {
   const ext = AVATAR_TYPES[file.type];
-  if (!ext) return { error: 'الصور المسموح بها: JPG أو PNG أو WEBP أو GIF فقط' };
-  if (file.size > AVATAR_MAX_BYTES) return { error: 'حجم الصورة يجب أن يكون أقل من 5 ميجابايت' };
-  return { ext };
+  if (!ext) return { ext: null, error: 'الصور المسموح بها: JPG أو PNG أو WEBP أو GIF فقط' };
+  if (file.size > AVATAR_MAX_BYTES) return { ext: null, error: 'حجم الصورة يجب أن يكون أقل من 5 ميجابايت' };
+  return { ext, error: '' };
 };
 
 // ── دالة تشغيل تأثير نغمة الرادار الإلكترونية ──────────────────────
