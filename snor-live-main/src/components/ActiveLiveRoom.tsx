@@ -38,6 +38,14 @@ interface ReceivedGift {
   cost: number;
 }
 
+type StreamChatMessage = {
+  id: string;
+  stream_id: string;
+  user_id: string;
+  username: string;
+  message: string;
+};
+
 const styles = {
   root: {
     position: 'fixed' as const,
@@ -351,7 +359,7 @@ const ChatInputArea = memo(({ onSendMessage }: { onSendMessage: (text: string) =
         type="text"
         value={chatInput}
         onChange={e => setChatInput(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && handleSubmit(e as any)}
+        onKeyDown={e => e.key === 'Enter' && handleSubmit(e as React.FormEvent)}
         placeholder="تحدث مع المتابعين..."
         style={styles.chatInput}
       />
@@ -430,7 +438,7 @@ export default function ActiveLiveRoom({
     let isCancelled = false;
     async function fetchToken() {
       try {
-        const { data, error } = await supabase.functions.invoke('livekit-token', {
+        const { data } = await supabase.functions.invoke('livekit-token', {
           body: { room: streamId, username: myUsername || 'المذيع', isStreamer: true }
         });
         if (!isCancelled && data?.token) setLiveKitToken(data.token);
@@ -471,7 +479,7 @@ export default function ActiveLiveRoom({
       .from('live_streams')
       .update({ is_live: false, last_heartbeat_at: new Date().toISOString() })
       .eq('id', streamId)
-      .eq('user_id', myUserId);
+      .eq('user_id', String(myUserId));
     onEndStream();
   }, [streamId, myUserId, stopHeartbeat, onEndStream]);
 
@@ -539,7 +547,7 @@ export default function ActiveLiveRoom({
 
     roomChannel
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stream_chat', filter: `stream_id=eq.${streamId}` }, (payload) => {
-        const newMsg = payload.new as any;
+        const newMsg = payload.new as StreamChatMessage;
         setChatMessages(prev => {
           const optimisticIdx = prev.findIndex(m => m.isOptimistic && m.userId === newMsg.user_id && m.text === newMsg.message);
           const withoutOptimistic = optimisticIdx >= 0 ? prev.filter((_, i) => i !== optimisticIdx) : prev;
@@ -567,7 +575,7 @@ export default function ActiveLiveRoom({
         setViewers(Math.max(1, Object.keys(state).length));
       })
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') roomChannel.track({ user_id: myUserId, role: 'streamer', online_at: new Date().toISOString() });
+        if (status === 'SUBSCRIBED') roomChannel.track({ user_id: String(myUserId), role: 'streamer', online_at: new Date().toISOString() });
       });
 
     supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data }) => {
@@ -616,7 +624,7 @@ export default function ActiveLiveRoom({
     ]);
 
     const { error } = await supabase.from('stream_chat').insert([{
-      stream_id: streamId, user_id: myUserId, username: myUsername || 'المذيع', message: text,
+      stream_id: streamId, user_id: String(myUserId), username: myUsername || 'المذيع', message: text,
     }]);
 
     if (error) {

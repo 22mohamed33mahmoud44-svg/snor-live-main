@@ -213,7 +213,7 @@ export default function Home({ lang, t, user, onShowAuth, onStartRandomMatch, on
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
             {t.gems.packages.map((pkg: any, i: number) => {
               // تحديد الـ ID الفعلي المربوط بـ جدول الأسعار والـ Webhook
-              const pkgIds = ['pkg_100', 'pkg_500', 'pkg_1000', 'pkg_1000'];
+              const pkgIds = ['pkg_100', 'pkg_500', 'pkg_1000'];
               const currentPkgId = pkgIds[i % pkgIds.length];
 
               return (

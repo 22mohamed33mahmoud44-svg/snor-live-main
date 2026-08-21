@@ -129,7 +129,7 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
   }, [myProfile?.id]);
 
   // 💾 معمارية حفظ جديدة مستقرة ولا تسبب وميض أو إغلاق الواجهة
-  const handleToggleSetting = async (key: any, currentValue: boolean) => {
+  const handleToggleSetting = async (key: SettingKey, currentValue: boolean) => {
     const newValue = !currentValue;
     
     // 1. تحديث الكونتكس والواجهة فوراً لسرعة فائقة
@@ -151,7 +151,7 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
 
   const formatNumber = (num: number) => num >= 1000 ? (num / 1000).toFixed(1) + 'k' : num.toString();
 
-  const handleDragEnd = (_e: any, info: PanInfo) => {
+  const handleDragEnd = (_e: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
     if (info.offset.y > 150 || info.velocity.y > 500) {
       vibrate();
       onClose();
@@ -269,3 +269,4 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
     </AnimatePresence>
   );
 }
+type SettingKey = keyof import('../context/SettingsContext').UserSettings;

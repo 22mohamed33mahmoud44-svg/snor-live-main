@@ -9,13 +9,25 @@ const PACKAGES = [
 
 type Step = "select" | "loading" | "awaiting_payment" | "error" | "success";
 
+type XPayStationWidgetType = {
+  on: (event: "close", handler: () => void) => void;
+  off?: (event: "close", handler: () => void) => void;
+  init: (options: { access_token: string; sandbox: boolean; lightbox: { width: string; height: string; zIndex: number } }) => void;
+  open: () => void;
+};
+
+type WindowWithXPayStation = Window & {
+  XPayStationWidget?: XPayStationWidgetType;
+};
+
 // ✅ M2 fix: كاش للـ Promise — مهما اتنادت الدالة، الـ script يتحمل
 // مرة واحدة وبـ listener واحد فقط (كان بيتضاف listener جديد مع كل نداء)
 // + الآن الدالة بترفض (reject) عند فشل التحميل بدل ما تعلّق للأبد
 let xsollaScriptPromise: Promise<void> | null = null;
 
 function loadXsollaScript(): Promise<void> {
-  if ((window as any).XPayStationWidget) return Promise.resolve();
+  const win = window as WindowWithXPayStation;
+  if (win.XPayStationWidget) return Promise.resolve();
   if (xsollaScriptPromise) return xsollaScriptPromise;
 
   xsollaScriptPromise = new Promise<void>((resolve, reject) => {
@@ -71,7 +83,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
   const closeHandlerAttachedRef = useRef(false);
   const widgetCloseHandlerRef = useRef<(() => void) | null>(null);
 
-  const attachWidgetCloseHandler = useCallback((XPayStationWidget: any) => {
+  const attachWidgetCloseHandler = useCallback((XPayStationWidget: XPayStationWidgetType) => {
     if (closeHandlerAttachedRef.current) return;
 
     const handler = () => {
@@ -85,7 +97,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
 
   useEffect(() => {
     return () => {
-      const XPayStationWidget = (window as any).XPayStationWidget;
+      const XPayStationWidget = (window as WindowWithXPayStation).XPayStationWidget;
       if (XPayStationWidget?.off && widgetCloseHandlerRef.current) {
         try {
           XPayStationWidget.off("close", widgetCloseHandlerRef.current);
@@ -152,7 +164,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
       // 2. انتظر الـ script يتحمل (الآن مع timeout ومعالجة فشل حقيقية)
       await loadXsollaScript();
 
-      const XPayStationWidget = (window as any).XPayStationWidget;
+      const XPayStationWidget = (window as WindowWithXPayStation).XPayStationWidget;
 
       if (XPayStationWidget) {
         // ✅ يتسجل مرة واحدة فقط مهما تكررت محاولات الشراء
@@ -178,8 +190,8 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
         );
         setStep("awaiting_payment");
       }
-    } catch (err: any) {
-      setErrorMsg(err.message ?? "حدث خطأ غير متوقع أثناء معالجة الطلب");
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "حدث خطأ غير متوقع أثناء معالجة الطلب");
       setStep("error");
     }
   };

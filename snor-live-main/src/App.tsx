@@ -2,6 +2,12 @@ import { useState, useEffect, lazy, Suspense } from 'react';
 import { useAuth, OnboardingData } from './hooks/useAuth';
 import { translations } from './translations';
 
+type Match = {
+  id: string;
+  user1: string;
+  user2: string;
+};
+
 const Splash = lazy(() => import('./Splash'));
 const Onboarding = lazy(() => import('./Onboarding'));
 const Auth = lazy(() => import('./Auth'));
@@ -38,7 +44,7 @@ function App() {
   const [showAuth, setShowAuth] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showRandomMatch, setShowRandomMatch] = useState(false);
-  const [currentMatch, setCurrentMatch] = useState<any>(null);
+  const [currentMatch, setCurrentMatch] = useState<Match | null>(null);
 
   const { user, profileChecked, profileError, showOnboarding, handleOnboardingComplete, logout } = useAuth();
   const t = translations[lang];
@@ -54,8 +60,6 @@ function App() {
   );
 
   const toggleLanguage = () => setLang(l => l === 'ar' ? 'en' : 'ar');
-  const getRemoteUserId = (match: any, myId: string) => match.user1 === myId ? match.user2 : match.user1;
-
   if (showSplash) return <Suspense fallback={<Loading />}><Splash onDone={() => setShowSplash(false)} /></Suspense>;
 
   if (user && profileError && !profileChecked) return <ProfileError message={profileError} onRetry={() => window.location.reload()} />;
@@ -70,13 +74,13 @@ function App() {
   if (user && profileChecked && !showOnboarding) {
     if (currentMatch) return (
       <Suspense fallback={<Loading />}>
-        <VideoCall userId={user.id} matchId={currentMatch.id} remoteUserId={getRemoteUserId(currentMatch, user.id)} onEnd={() => setCurrentMatch(null)} onNext={() => { setCurrentMatch(null); setShowRandomMatch(true); }} />
+        <VideoCall userId={user.id} matchId={currentMatch.id} onEnd={() => setCurrentMatch(null)} onNext={() => { setCurrentMatch(null); setShowRandomMatch(true); }} />
       </Suspense>
     );
 
     if (showRandomMatch) return (
       <Suspense fallback={<Loading />}>
-        <RandomMatch userId={user.id} onClose={() => setShowRandomMatch(false)} onMatch={(match: any) => { setCurrentMatch(match); setShowRandomMatch(false); }} />
+        <RandomMatch userId={user.id} onClose={() => setShowRandomMatch(false)} onMatch={(match: Match) => { setCurrentMatch(match); setShowRandomMatch(false); }} />
       </Suspense>
     );
 

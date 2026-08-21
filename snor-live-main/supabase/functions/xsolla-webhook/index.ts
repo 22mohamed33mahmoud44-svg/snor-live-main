@@ -127,11 +127,9 @@ serve(async (req) => {
         .from("transactions")
         .insert({
           user_id: userId,
-          type: "purchase",
-          status: "success",
           amount: coinsToAdd,
-          provider: "xsolla",
-          provider_txn_id: transactionId,
+          type: "buy",
+          status: "success",
           meta: { xsolla_transaction_id: transactionId, sku: itemSku },
         })
         .select("id")
@@ -148,9 +146,10 @@ serve(async (req) => {
       }
 
       // ── 3b. إضافة الكوينز عبر RPC ذرّي يزيد الرصيد (لا يستبدله أبداً) ──
-      const { error: coinsErr } = await supabase.rpc("increment_coins", {
+      const { error: coinsErr } = await supabase.rpc("add_coins", {
         p_user_id: userId,
         p_amount: coinsToAdd,
+        p_meta: { xsolla_transaction_id: transactionId, sku: itemSku },
       });
 
       if (coinsErr) {

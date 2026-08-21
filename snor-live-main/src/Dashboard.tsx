@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { supabase } from './supabase';
 
 // ── Components ──────────────────────────────────────────────────
@@ -16,7 +16,7 @@ import { SnorLiveLogo } from './components/icons/SnorLiveLogo';
 import { GearIcon, VideoIcon, LogoutIcon, SearchIcon, HomeIcon, UsersIcon, ChatIcon } from './components/icons/Icons';
 
 // ── Types, Utils & Constants ────────────────────────────────────
-import type { Profile, ConvUser, ChatOther, MsgItem, DashboardProps, CallState, TabKey } from './types';
+import type { Profile, ConvUser, ChatOther, DashboardProps, CallState, TabKey } from './types';
 import { timeAgo, initials, playRadarSound } from './utils/helpers';
 import { GLOBAL_CSS } from './constants/styles';
 
@@ -49,7 +49,12 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     const { data, error } = await supabase
       .from('live_streams')
       .insert([
-        { user_id: userId, title: title || 'بث مباشر جديد', streamer_name: myProfile?.full_name || 'مستخدم سنور', is_live: true }
+        {
+          user_id: String(userId),
+          title: title || 'بث مباشر جديد',
+          streamer_name: myProfile?.full_name || 'مستخدم سنور',
+          is_live: true,
+        }
       ]).select().single();
 
     if (error) {
@@ -69,7 +74,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   }, [userId]);
 
   // ── Screen Router ─────────────────────────────────────────────
-  if (activeCall) return <VideoCall userId={userId} matchId={activeCall.matchId} remoteUserId={activeCall.remoteUserId} onEnd={() => setActiveCall(null)} onNext={() => { setActiveCall(null); setShowRandomMatch(true); }} />;
+  if (activeCall) return <VideoCall userId={userId} matchId={activeCall.matchId} onEnd={() => setActiveCall(null)} onNext={() => { setActiveCall(null); setShowRandomMatch(true); }} />;
   if (showRandomMatch) return <RandomMatch userId={userId} onClose={() => setShowRandomMatch(false)} onMatch={(match) => { setShowRandomMatch(false); const remoteUserId = match.user1 === userId ? match.user2 : match.user1; setActiveCall({ matchId: match.id, remoteUserId, type: 'video' }); }} />;
   if (openChat) return <PrivateChat myId={userId} other={openChat} onBack={() => setOpenChat(null)} onStartCall={handleStartCall} />;
   if (showSettings) return <SettingsPanel onClose={() => setShowSettings(false)} myProfile={myProfile} onLogout={onLogout} onOpenEdit={() => { setShowSettings(false); setShowEditProfile(true); }} />;
@@ -215,7 +220,7 @@ const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string,
 
   // 🚀 السحب الخارق للأداء باستخدام الدالة (RPC) الجديدة
   const fetchConversations = useCallback(async () => {
-    const { data: convStats, error } = await supabase.rpc('get_user_conversations', { p_user_id: userId });
+    const { data: convStats, error } = await supabase.rpc('get_user_conversations', { p_user_id: String(userId) });
 
     if (error || !convStats || convStats.length === 0) {
       setConversations([]);
@@ -223,18 +228,18 @@ const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string,
       return;
     }
 
-    const partnerIds = convStats.map((c: any) => c.partner_id);
+    const partnerIds = convStats.map((c: { partner_id: string }) => c.partner_id);
     // H4: قراءة بيانات المستخدمين الآخرين تتم عبر view الأعمدة الآمنة فقط
-    const { data: profiles } = await supabase.from('public_profiles').select('id, username, full_name, avatar_url, gender').in('id', partnerIds);
+    const { data: profiles } = await supabase.from('profiles').select('id, username, full_name, avatar_url, gender').in('id', partnerIds);
 
     if (profiles) {
       const convList: ConvUser[] = profiles.map(p => {
-        const stat = convStats.find((s: any) => s.partner_id === p.id);
+        const stat = convStats.find((s: { partner_id: string }) => s.partner_id === p.id);
         return {
           profile: p,
-          lastMessage: stat.last_message,
-          lastTime: stat.last_time,
-          unread: Number(stat.unread_count || 0)
+          lastMessage: stat?.last_message ?? '',
+          lastTime: stat?.last_time ?? new Date().toISOString(),
+          unread: Number(stat?.unread_count || 0)
         };
       }).sort((a, b) => new Date(b.lastTime).getTime() - new Date(a.lastTime).getTime());
 
@@ -257,7 +262,7 @@ const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string,
 
     const channel = supabase.channel(`chats-tracker-${userId}`)
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${userId}` },
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${String(userId)}` },
         scheduleRefetch
       )
       .subscribe();

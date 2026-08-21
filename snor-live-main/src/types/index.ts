@@ -52,7 +52,7 @@ export interface SettingsPanelProps {
 export interface DashboardProps {
   userId?: string;
   onLogout?: () => void;
-  onStartRandomMatch?: () => void;  // ← أضف السطر ده
+  onStartRandomMatch?: () => void;
 }
 
 export type TabKey = 'home' | 'match' | 'chats' | 'profile';

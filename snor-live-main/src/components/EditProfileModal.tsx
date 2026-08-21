@@ -1,6 +1,15 @@
 import { useState } from 'react';
 import { supabase } from '../supabase';
 
+type ProfileData = {
+  id: string;
+  full_name?: string;
+  username?: string;
+  avatar_url?: string;
+  gender?: string;
+  updated_at?: string;
+};
+
 interface EditProfileModalProps {
   myProfile: {
     id: string;
@@ -10,7 +19,7 @@ interface EditProfileModalProps {
     gender?: string;
   } | null;
   onClose: () => void;
-  onProfileUpdated: (updatedProfile: any) => void;
+  onProfileUpdated: (updatedProfile: ProfileData) => void;
 }
 
 export default function EditProfileModal({ myProfile, onClose, onProfileUpdated }: EditProfileModalProps) {
@@ -45,14 +54,19 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
 
       // 🚀 إضافة Cache-Buster لإجبار الواجهة على تحديث الصورة فوراً
       setAvatarUrl(`${publicUrl}?t=${Date.now()}`);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'فشل في رفع الصورة، تأكد من الصلاحيات وحجم الملف.');
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'فشل في رفع الصورة، تأكد من الصلاحيات وحجم الملف.');
     } finally {
       setUploading(false);
     }
   };
 
   const handleSave = async () => {
+    if (!myProfile?.id) {
+      setErrorMsg('تعذر تحديد هوية الملف الشخصي');
+      return;
+    }
+
     if (!username.trim() || !fullName.trim()) {
       setErrorMsg('يرجى ملء جميع الحقول المطلوبة');
       return;
@@ -69,7 +83,7 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
         .replace(/[^a-z0-9_]/g, '');
 
       const updatedData = {
-        id: myProfile?.id,
+        id: myProfile.id,
         full_name: fullName,
         username: sanitizedUsername,
         gender,
@@ -85,8 +99,8 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
 
       onProfileUpdated(updatedData);
       onClose();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'حدث خطأ أثناء حفظ البيانات، تأكد من اتصالك بالإنترنت.');
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'حدث خطأ أثناء حفظ البيانات، تأكد من اتصالك بالإنترنت.');
     } finally {
       setSaving(false);
     }

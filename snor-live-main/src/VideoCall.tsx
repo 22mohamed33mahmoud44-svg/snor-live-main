@@ -6,7 +6,6 @@ import { Track, ConnectionState } from 'livekit-client';
 type Props = {
   userId: string;
   matchId: string;
-  remoteUserId: string;
   onEnd: () => void;
   onNext: () => void;
 };
@@ -15,6 +14,10 @@ const SFX_CONNECTING = 'https://assets.mixkit.co/active_storage/sfx/2568/2568-84
 const SFX_END = 'https://assets.mixkit.co/active_storage/sfx/2564/2564-84.wav';
 const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 type ErrorType = 'camera_denied' | 'camera_not_found' | 'connection_timeout' | 'connection_failed' | null;
+type SignalMessage = {
+  sender: string;
+  type: string;
+};
 const classifyLiveKitError = (error: unknown): Exclude<ErrorType, null> => {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? '').toLowerCase();
   const name = error instanceof Error ? error.name.toLowerCase() : '';
@@ -33,7 +36,7 @@ const NextIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="non
 const EndIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="2" x2="22" y1="2" y2="22"/></svg>;
 const SendIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>;
 
-export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext }: Props) {
+export default function VideoCall({ userId, matchId, onEnd, onNext }: Props) {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<ErrorType>(null);
   const [muted, setMuted] = useState(false);
@@ -81,10 +84,10 @@ export default function VideoCall({ userId, matchId, remoteUserId, onEnd, onNext
 
   if (tokenLoading || !token) return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box"><VideoIcon /></div><h2>جاري تجهيز الاتصال</h2><p>نقوم بتجهيز الاتصال الآمن بالفيديو، لحظات...</p></div>;
 
-  return <LiveKitRoom token={token} serverUrl={import.meta.env.VITE_LIVEKIT_URL} connect={true} video={!camOff} audio={!muted} onError={(liveKitError) => setError(classifyLiveKitError(liveKitError))}><CallUI userId={userId} matchId={matchId} remoteUserId={remoteUserId} onEnd={onEnd} onNext={onNext} muted={muted} setMuted={setMuted} camOff={camOff} setCamOff={setCamOff} /></LiveKitRoom>;
+  return <LiveKitRoom token={token} serverUrl={import.meta.env.VITE_LIVEKIT_URL} connect={true} video={!camOff} audio={!muted} onError={(liveKitError) => setError(classifyLiveKitError(liveKitError))}><CallUI userId={userId} matchId={matchId} onEnd={onEnd} onNext={onNext} muted={muted} setMuted={setMuted} camOff={camOff} setCamOff={setCamOff} /></LiveKitRoom>;
 }
 
-function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted, camOff, setCamOff }: Props & { muted: boolean, setMuted: React.Dispatch<React.SetStateAction<boolean>>, camOff: boolean, setCamOff: React.Dispatch<React.SetStateAction<boolean>> }) {
+function CallUI({ userId, matchId, onEnd, onNext, muted, setMuted, camOff, setCamOff }: Omit<Props, 'remoteUserId'> & { muted: boolean, setMuted: React.Dispatch<React.SetStateAction<boolean>>, camOff: boolean, setCamOff: React.Dispatch<React.SetStateAction<boolean>> }) {
   const [mirrored, setMirrored] = useState(true);
   const [duration, setDuration] = useState(0);
   const [messages, setMessages] = useState<{ id: string; sender_id: string; message: string }[]>([]);
@@ -116,7 +119,7 @@ function CallUI({ userId, matchId, remoteUserId, onEnd, onNext, muted, setMuted,
     const channelName = `vc-chat-sig-${matchId}`;
     const channel = supabase.channel(channelName)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` }, payload => { const incoming = payload.new as { id: string; sender_id: string; message: string }; setMessages(prev => (prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming])); if (incoming.sender_id !== userId) setNewMsg(true); })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` }, payload => { const msg = payload.new as any; if (msg.sender !== userId && msg.type === 'end') { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } const audio = new Audio(SFX_END); audio.volume = 0.4; audio.play().catch(() => {}); sfxRef.current = audio; onEndRef.current(); } })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` }, payload => { const msg = payload.new as SignalMessage; if (msg.sender !== userId && msg.type === 'end') { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } const audio = new Audio(SFX_END); audio.volume = 0.4; audio.play().catch(() => {}); sfxRef.current = audio; onEndRef.current(); } })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [matchId, userId]);

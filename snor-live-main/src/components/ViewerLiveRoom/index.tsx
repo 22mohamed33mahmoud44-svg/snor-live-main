@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Heart, Users, Gift, Sparkles } from 'lucide-react';
 
 // استيراد مكونات LiveKit الحديثة
-import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useTracks } from '@livekit/components-react';
+import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useTracks, type TrackReference } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import '@livekit/components-styles';
 
@@ -47,6 +47,15 @@ interface GiftToast {
   emoji: string;
   giftName: string;
 }
+
+type RealtimeChatMessage = {
+  id: string;
+  stream_id: string;
+  user_id: string;
+  username: string;
+  message: string;
+};
+
 
 const MESSAGES_LIMIT = 30;
 const HEART_EMOJIS = ['💖', '🔥', '✨', '❤️', '😍'];
@@ -123,10 +132,10 @@ export default function ViewerLiveRoom({
         } else {
           throw new Error('تعذر استلام مفتاح الاتصال بالبث');
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!isCancelled) {
           console.error('LiveKit Token Fetch Error:', err);
-          showToast(err.message || 'فشل الاتصال بسيرفر البث الرئيسي');
+          showToast(err instanceof Error ? err.message : 'فشل الاتصال بسيرفر البث الرئيسي');
         }
       }
     }
@@ -208,7 +217,7 @@ export default function ViewerLiveRoom({
     roomChannel
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stream_chat', filter: `stream_id=eq.${streamId}` }, (payload) => {
         if (!isMounted) return;
-        const newMsg = payload.new as any;
+        const newMsg = payload.new as RealtimeChatMessage;
         if (newMsg.user_id === currentMyUserId) return;
         setMessages(prev => [...prev.slice(-(MESSAGES_LIMIT - 1)), newMsg]);
       })
@@ -523,5 +532,5 @@ function LiveStreamVideoRenderer() {
     );
   }
 
-  return <VideoTrack trackRef={cameraTrack as any} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
+  return <VideoTrack trackRef={cameraTrack as TrackReference} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
 }

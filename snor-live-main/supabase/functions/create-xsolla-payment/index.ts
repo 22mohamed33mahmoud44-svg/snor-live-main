@@ -81,7 +81,8 @@ serve(async (req: Request) => {
       .from("transactions")
       .insert({
         user_id: user.id,
-        type:    "purchase",
+        amount:  pkg.coins,
+        type:    "buy",
         status:  "pending",
         meta: {
           xsolla_token: xsollaData.token,

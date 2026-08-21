@@ -69,9 +69,9 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
       // 3. النجاح التام
       onComplete();
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       // 4. اصطياد أي خطأ في الرفع أو قاعدة البيانات وعرضه للمستخدم
-      setMessage(error.message || 'حدث خطأ غير متوقع أثناء الحفظ.');
+      setMessage(error instanceof Error ? error.message : 'حدث خطأ غير متوقع أثناء الحفظ.');
     } finally {
       // 5. إيقاف التحميل دائماً، سواء نجحت أو فشلت العملية
       setLoading(false);
