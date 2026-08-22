@@ -1,20 +1,8 @@
 /*
-# Migration 018: Supabase Storage — Avatars Bucket + Thumbnails Bucket
+# Migration 018: Supabase Storage — Avatars Bucket + Thumbnails Bucket (Fixed)
 # =====================================================================
-# الـ Frontend يستخدم `supabase.storage.from('avatars')` في 4 أماكن:
-#   1. CompleteProfile.tsx   — رفع الصورة عند إكمال البروفايل
-#   2. EditProfileModal.tsx  — تعديل صورة البروفايل
-#   3. hooks/useAuth.ts      — رفع الصورة عند التسجيل
-#   4. LiveStreamGrid.tsx    — thumbnail البث المباشر
-#
-# New Storage Buckets:
-#   1. avatars       — صور البروفايل (public)
-#   2. thumbnails    — صور البث المباشر (public)
-#   3. gifts         — صور/animations الهدايا (public)
-#
-# Storage RLS Policies:
-#   - Anyone can read (public bucket)
-#   - Only owner can upload/update/delete their own files
+# Fix: Added DROP POLICY IF EXISTS before every CREATE POLICY
+#      to make this migration fully idempotent (safe for Preview & re-runs)
 */
 
 -- ── 1. Create Storage Buckets ──
@@ -29,6 +17,11 @@ ON CONFLICT (id) DO UPDATE SET
   allowed_mime_types = EXCLUDED.allowed_mime_types;
 
 -- ── 2. RLS: avatars bucket ──
+DROP POLICY IF EXISTS "avatars public read"   ON storage.objects;
+DROP POLICY IF EXISTS "avatars owner upload"  ON storage.objects;
+DROP POLICY IF EXISTS "avatars owner update"  ON storage.objects;
+DROP POLICY IF EXISTS "avatars owner delete"  ON storage.objects;
+
 CREATE POLICY "avatars public read"
   ON storage.objects FOR SELECT
   USING (bucket_id = 'avatars');
@@ -58,6 +51,11 @@ CREATE POLICY "avatars owner delete"
   );
 
 -- ── 3. RLS: thumbnails bucket ──
+DROP POLICY IF EXISTS "thumbnails public read"   ON storage.objects;
+DROP POLICY IF EXISTS "thumbnails owner upload"  ON storage.objects;
+DROP POLICY IF EXISTS "thumbnails owner update"  ON storage.objects;
+DROP POLICY IF EXISTS "thumbnails owner delete"  ON storage.objects;
+
 CREATE POLICY "thumbnails public read"
   ON storage.objects FOR SELECT
   USING (bucket_id = 'thumbnails');
@@ -86,8 +84,9 @@ CREATE POLICY "thumbnails owner delete"
     (storage.foldername(name))[1] = auth.uid()::text
   );
 
--- ── 4. RLS: gifts bucket (read-only for users, service_role manages) ──
+-- ── 4. RLS: gifts bucket ──
+DROP POLICY IF EXISTS "gifts public read" ON storage.objects;
+
 CREATE POLICY "gifts public read"
   ON storage.objects FOR SELECT
   USING (bucket_id = 'gifts');
-
