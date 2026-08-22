@@ -1,7 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { useAuth, OnboardingData } from './hooks/useAuth';
 import { translations } from './translations';
-import CamberFeaturesMenu from './components/CamberFeaturesMenu';
 
 type Match = {
   id: string;
@@ -32,7 +31,7 @@ const ProfileError = ({ message, onRetry }: { message: string; onRetry: () => vo
       <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
       <h2 style={{ margin: '0 0 10px', fontSize: 22 }}>تعذر تحميل ملفك الشخصي</h2>
       <p style={{ color: 'rgba(255,255,255,.65)', lineHeight: 1.7, margin: '0 0 24px' }}>{message}</p>
-      <button type="button" onClick={onRetry} style={{ border: 0, borderRadius: 12, padding: '12px 28px', background:'#7c3aed', color:'#fff', cursor:'pointer', fontSize:16, fontWeight:700 }}>
+      <button type="button" onClick={onRetry} style={{ border: 0, borderRadius: 12, padding: '12px 28px', background: '#7c3aed', color: '#fff', cursor: 'pointer', fontSize: 16, fontWeight: 700 }}>
         إعادة المحاولة
       </button>
     </div>
@@ -85,12 +84,7 @@ function App() {
       </Suspense>
     );
 
-    return (
-      <>
-        <Suspense fallback={<Loading />}><Dashboard userId={user.id} onLogout={logout} /></Suspense>
-        <CamberFeaturesMenu />
-      </>
-    );
+    return <Suspense fallback={<Loading />}><Dashboard userId={user.id} onLogout={logout} /></Suspense>;
   }
 
   return (
