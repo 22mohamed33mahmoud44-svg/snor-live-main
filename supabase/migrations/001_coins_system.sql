@@ -1,0 +1,7 @@
+-- Legacy migration marker.
+-- The actual coins-system migration is maintained in:
+-- 20260723064545_001_coins_system.sql
+--
+-- This file intentionally contains no SQL. It is kept so Supabase's
+-- migration history remains locally represented and does not report:
+-- "Remote migration versions not found in local migrations directory".
