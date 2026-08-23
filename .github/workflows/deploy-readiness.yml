@@ -1,0 +1,36 @@
+name: Deploy Readiness
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: snor-live-main/package-lock.json
+
+      - name: Install app dependencies
+        working-directory: /home/runner/work/snor-live-main/snor-live-main/snor-live-main
+        run: npm ci
+
+      - name: Verify deploy/database readiness
+        working-directory: /home/runner/work/snor-live-main/snor-live-main
+        run: node scripts/verify-deploy-readiness.mjs
+
+      - name: Build app
+        working-directory: /home/runner/work/snor-live-main/snor-live-main/snor-live-main
+        run: npm run build
