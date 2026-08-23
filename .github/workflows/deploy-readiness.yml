@@ -28,7 +28,7 @@ jobs:
 
       - name: Install app dependencies
         working-directory: /home/runner/work/snor-live-main/snor-live-main/snor-live-main
-        run: npm ci
+        run: npm install
 
       - name: Verify deploy/database readiness
         working-directory: /home/runner/work/snor-live-main/snor-live-main
