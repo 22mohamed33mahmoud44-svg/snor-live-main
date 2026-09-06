@@ -623,13 +623,19 @@ export default function ActiveLiveRoom({
       { id: optimisticId, user: myUsername || 'المذيع', userId: myUserId, text, color: '#ff2a74', isOptimistic: true },
     ]);
 
-    const { error } = await supabase.from('stream_chat').insert([{
-      stream_id: streamId, user_id: String(myUserId), username: myUsername || 'المذيع', message: text,
-    }]);
+    const { data, error } = await supabase.rpc('send_chat_message', {
+      p_stream_id: streamId,
+      p_message: text,
+      p_username: myUsername || 'المذيع',
+    });
 
-    if (error) {
+    if (error || !data?.success) {
       setChatMessages(prev => prev.filter(m => m.id !== optimisticId));
-      console.error('فشل إرسال الرسالة:', error.message);
+      if (data?.error === 'rate_limited') {
+        console.warn('chat rate limited');
+        return;
+      }
+      console.error('فشل إرسال الرسالة:', error?.message ?? data?.error ?? 'unknown error');
     }
   }, [streamId, myUserId, myUsername]);
 
