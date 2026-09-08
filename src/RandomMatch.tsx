@@ -14,7 +14,7 @@ type Phase = 'idle' | 'waiting' | 'matched' | 'error';
 // نطاق البحث عن مباراة حديثة (للفحص الاحتياطي) — دقيقتان
 const RECENT_MATCH_WINDOW_MS = 2 * 60 * 1000;
 // فاصل الفحص الاحتياطي الدوري أثناء الانتظار
-const POLL_INTERVAL_MS = 4000;
+const POLL_INTERVAL_MS = 2000;
 
 export default function RandomMatch({ userId, onClose, onMatch }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
@@ -26,8 +26,6 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
   const matchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const matchedRef = useRef(false);
   const startingRef = useRef(false);
-  // مرجع للمرحلة الحالية حتى يعمل تنظيف "عند الإغلاق فقط" بالقيمة الصحيحة
-  // (سابقاً كان الـ effect يعتمد على [phase] فيعمل التنظيف عند كل تغيير مرحلة)
   const phaseRef = useRef<Phase>('idle');
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
@@ -83,7 +81,6 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
   }, []);
 
   const handleMatchFound = useCallback((match: Match) => {
-    // حارس ضد التكرار: قد يصل نفس الحدث من القناة اللحظية ومن الفحص الاحتياطي معاً
     if (matchedRef.current) return;
     matchedRef.current = true;
 
@@ -91,15 +88,13 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
     successAudioRef.current?.play().catch(() => {});
     setPhaseSafe('matched');
 
-    // ⏱️ مؤقت الاحتفال يُحفظ في مرجع ليُلغى عند إغلاق الشاشة
-    // (سابقاً كان يشتغل حتى بعد فك المكون ويسحب المستخدم لمكالمة وهو خارجها)
-    matchTimer.current = setTimeout(() => onMatch(match), 1800);
+    matchTimer.current = setTimeout(() => onMatch(match), 1200);
   }, [onMatch, setPhaseSafe, stopSearchResources]);
 
-  // 🔍 فحص احتياطي: هل توجد مباراة نشطة حديثة أنا طرف فيها؟
-  // يغطي حالة ضياع حدث INSERT (انقطاع websocket لحظي أو أي سباق آخر)
+  // 🔍 فحص مباشر مستقل عن Realtime
   const checkExistingMatch = useCallback(async () => {
-    if (matchedRef.current) return;
+    if (matchedRef.current || phaseRef.current !== 'waiting') return;
+
     const cutoff = new Date(Date.now() - RECENT_MATCH_WINDOW_MS).toISOString();
     const { data } = await supabase
       .from('matches')
@@ -118,7 +113,6 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
 
   // ── Start matching ───────────────────────────────────────────
   const handleStart = async () => {
-    // حارس ضد الضغط المتكرر على الزر
     if (startingRef.current || phaseRef.current === 'waiting') return;
     startingRef.current = true;
 
@@ -127,46 +121,45 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
     radarAudioRef.current?.play().catch(() => {});
 
     try {
-      // 1️⃣ الاشتراك في القناة *أولاً* وانتظار تأكيد SUBSCRIBED
-      //    قبل استدعاء الـ RPC — هذا يغلق نافذة السباق التي كانت
-      //    تضيع فيها أحداث INSERT بين رد الـ RPC وتفعيل الاشتراك.
+      // نبدأ شبكة الأمان فورًا؛ المطابقة لا تعتمد على نجاح WebSocket.
+      pollTimer.current = setInterval(checkExistingMatch, POLL_INTERVAL_MS);
+
+      // الاشتراك اختياري للسرعة فقط. لو فشل أو تأخر، الـRPC + polling يكملان.
       const onInsert = (payload: { new: Record<string, unknown> }) => {
         handleMatchFound(payload.new as unknown as Match);
       };
 
-      await new Promise<void>((resolve, reject) => {
-        const channel = supabase
-          .channel(`my-match-${userId}-${Date.now()}`)
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches', filter: `user1=eq.${userId}` }, onInsert)
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches', filter: `user2=eq.${userId}` }, onInsert)
-          .subscribe((status) => {
-            if (status === 'SUBSCRIBED') resolve();
-            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') reject(new Error(`channel ${status}`));
-            // ملاحظة: لو حدث خطأ بالقناة لاحقاً أثناء الانتظار،
-            // الفحص الدوري أدناه يستمر كشبكة أمان.
-          });
-        channelRef.current = channel;
-      });
+      const channel = supabase
+        .channel(`my-match-${userId}-${Date.now()}`)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'matches',
+          filter: `user1=eq.${userId}`,
+        }, onInsert)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'matches',
+          filter: `user2=eq.${userId}`,
+        }, onInsert)
+        .subscribe();
+      channelRef.current = channel;
 
-      // المستخدم ألغى أثناء الاشتراك؟
-     if ((phaseRef.current as string) !== 'waiting') return;
-
-      // 2️⃣ الآن فقط نستدعي الـ RPC الآمنة (transaction + FOR UPDATE SKIP LOCKED)
+      // الـRPC هي المصدر الأساسي للحقيقة.
       const result = await startMatching(userId);
+
+      if (phaseRef.current !== 'waiting') return;
 
       if (result.status === 'matched' && result.match) {
         handleMatchFound(result.match);
         return;
       }
 
-      // 3️⃣ فحص فوري بعد الدخول لقائمة الانتظار + فحص دوري كشبكة أمان
+      // فحص فوري بعد إضافة المستخدم لقائمة الانتظار.
       await checkExistingMatch();
-     if ((phaseRef.current as string) === 'waiting') {
-        pollTimer.current = setInterval(checkExistingMatch, POLL_INTERVAL_MS);
-      }
     } catch {
       stopSearchResources();
-      // لا نترك صف انتظار معلقاً لو الـ RPC نجحت ثم فشل شيء آخر
       cancelMatching(userId).catch(() => {});
       setPhaseSafe('error');
     } finally {
@@ -176,15 +169,11 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
 
   // ── Cancel while waiting ─────────────────────────────────────
   const handleCancel = async () => {
-    // لو المطابقة تمت بالفعل في نفس لحظة الضغط، لا نلغي — الاحتفال جارٍ
     if (matchedRef.current) return;
 
     stopSearchResources();
     await cancelMatching(userId);
 
-    // 🛡️ سباق الإلغاء: قد يكون شريك قد طابقنا في اللحظة نفسها قبل حذف
-    // صف الانتظار. لو وُجدت مباراة نشطة حديثة، ننهيها ونرسل إشارة end
-    // حتى لا يبقى الطرف الآخر معلقاً في مكالمة فارغة.
     const cutoff = new Date(Date.now() - RECENT_MATCH_WINDOW_MS).toISOString();
     const { data: strayMatch } = await supabase
       .from('matches')
@@ -204,7 +193,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
     setPhaseSafe('idle');
   };
 
-  // 🧹 تنظيف عند إغلاق الشاشة فقط (وليس عند كل تغيير مرحلة كما كان سابقاً)
+  // 🧹 تنظيف عند إغلاق الشاشة فقط
   useEffect(() => {
     return () => {
       if (matchTimer.current) clearTimeout(matchTimer.current);
@@ -228,7 +217,6 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
         <button style={s.closeBtn} onClick={onClose} aria-label="إغلاق">✕</button>
       )}
 
-      {/* الرادار المتحرك */}
       {phase === 'waiting' && (
         <div style={s.ringsWrap}>
           {[0, 1, 2].map(i => (
@@ -244,7 +232,6 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
         </div>
       )}
 
-      {/* الأفاتار المتحرك */}
       <AnimatePresence mode="wait">
         <motion.div
           key={phase}
@@ -275,7 +262,6 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
         {phase === 'error'   && 'تعذر بدء البحث. تأكد من اتصالك بالإنترنت وحاول مرة أخرى'}
       </p>
 
-      {/* أزرار التحكم */}
       {(phase === 'idle' || phase === 'error') && (
         <motion.button
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
