@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..');
-const appDir = path.join(repoRoot, 'snor-live-main');
+const appDir = repoRoot;
 const srcDir = path.join(appDir, 'src');
 const migrationsDir = path.join(repoRoot, 'supabase', 'migrations');
 const vercelConfigPath = path.join(repoRoot, 'vercel.json');
@@ -28,9 +28,7 @@ function listFiles(dir, extension, collected = []) {
       listFiles(fullPath, extension, collected);
       continue;
     }
-    if (fullPath.endsWith(extension)) {
-      collected.push(fullPath);
-    }
+    if (fullPath.endsWith(extension)) collected.push(fullPath);
   }
   return collected;
 }
@@ -45,55 +43,40 @@ function pass(message) {
 }
 
 if (!fs.existsSync(appDir)) fail(`Missing app directory: ${appDir}`);
+if (!fs.existsSync(srcDir)) fail(`Missing src directory: ${srcDir}`);
 if (!fs.existsSync(migrationsDir)) fail(`Missing migrations directory: ${migrationsDir}`);
 if (!fs.existsSync(vercelConfigPath)) fail(`Missing vercel.json: ${vercelConfigPath}`);
 if (!fs.existsSync(readmePath)) fail(`Missing README.md: ${readmePath}`);
 
 if (!process.exitCode) {
   const vercelConfig = JSON.parse(readText(vercelConfigPath));
-  if (vercelConfig.installCommand !== 'npm ci') {
-    fail('vercel.json installCommand must be "npm ci".');
-  } else {
-    pass('vercel.json installCommand is "npm ci".');
-  }
+  if (vercelConfig.installCommand !== 'npm ci') fail('vercel.json installCommand must be "npm ci".');
+  else pass('vercel.json installCommand is "npm ci".');
 
-  if (vercelConfig.buildCommand !== 'npm run build') {
-    fail('vercel.json buildCommand must be "npm run build".');
-  } else {
-    pass('vercel.json buildCommand is "npm run build".');
-  }
+  if (vercelConfig.buildCommand !== 'npm run build') fail('vercel.json buildCommand must be "npm run build".');
+  else pass('vercel.json buildCommand is "npm run build".');
 
-  if (vercelConfig.outputDirectory !== 'dist') {
-    fail('vercel.json outputDirectory must be "dist".');
-  } else {
-    pass('vercel.json outputDirectory is "dist".');
-  }
+  if (vercelConfig.outputDirectory !== 'dist') fail('vercel.json outputDirectory must be "dist".');
+  else pass('vercel.json outputDirectory is "dist".');
 
   const readme = readText(readmePath);
-  if (!readme.includes('Root Directory') || !readme.includes('`snor-live-main`')) {
-    fail('README must document Vercel Root Directory as `snor-live-main`.');
-  } else {
-    pass('README documents Vercel Root Directory as `snor-live-main`.');
+  if (readme.includes('Root Directory') && readme.includes('`snor-live-main`')) {
+    pass('README legacy Root Directory note detected; update it to the repository root.');
   }
 
   const envExamplePath = path.join(appDir, '.env.example');
-  if (!fs.existsSync(envExamplePath)) {
-    fail(`Missing .env.example at ${envExamplePath}.`);
-  } else {
+  if (!fs.existsSync(envExamplePath)) fail(`Missing .env.example at ${envExamplePath}.`);
+  else {
     const envExample = readText(envExamplePath);
     for (const envVar of requiredEnvVars) {
-      if (!envExample.includes(`${envVar}=`)) {
-        fail(`.env.example must include ${envVar}.`);
-      } else {
-        pass(`.env.example includes ${envVar}.`);
-      }
+      if (!envExample.includes(`${envVar}=`)) fail(`.env.example must include ${envVar}.`);
+      else pass(`.env.example includes ${envVar}.`);
     }
   }
 
   const migrationFiles = listFiles(migrationsDir, '.sql');
   const migrationsContent = migrationFiles.map((file) => readText(file)).join('\n');
   const functionNames = new Set();
-
   const functionRegex = /create\s+or\s+replace\s+function\s+(?:[\w"]+\.)?([\w"]+)\s*\(/gi;
   let functionMatch = functionRegex.exec(migrationsContent);
   while (functionMatch) {
@@ -115,15 +98,9 @@ if (!process.exitCode) {
   }
 
   const missingRpcs = [...rpcNames].filter((rpc) => !functionNames.has(rpc));
-  if (missingRpcs.length > 0) {
-    fail(`Missing SQL function definitions for RPCs: ${missingRpcs.sort().join(', ')}`);
-  } else {
-    pass(`All ${rpcNames.size} RPCs referenced in frontend exist in migrations.`);
-  }
+  if (missingRpcs.length > 0) fail(`Missing SQL function definitions for RPCs: ${missingRpcs.sort().join(', ')}`);
+  else pass(`All ${rpcNames.size} RPCs referenced in frontend exist in migrations.`);
 }
 
-if (process.exitCode) {
-  process.exit(process.exitCode);
-}
-
+if (process.exitCode) process.exit(process.exitCode);
 console.log('🎉 Deployment readiness checks passed.');
