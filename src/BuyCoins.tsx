@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabase";
 
 const PACKAGES = [
@@ -9,141 +9,51 @@ const PACKAGES = [
 
 type Step = "select" | "loading" | "awaiting_payment" | "error" | "success";
 
-type XPayStationWidgetType = {
-  on: (event: "close", handler: () => void) => void;
-  off?: (event: "close", handler: () => void) => void;
-  init: (options: { access_token: string; sandbox: boolean; lightbox: { width: string; height: string; zIndex: number } }) => void;
-  open: () => void;
-};
-
-type WindowWithXPayStation = Window & {
-  XPayStationWidget?: XPayStationWidgetType;
-};
-
-// ✅ M2 fix: كاش للـ Promise — مهما اتنادت الدالة، الـ script يتحمل
-// مرة واحدة وبـ listener واحد فقط (كان بيتضاف listener جديد مع كل نداء)
-// + الآن الدالة بترفض (reject) عند فشل التحميل بدل ما تعلّق للأبد
-let xsollaScriptPromise: Promise<void> | null = null;
-
-function loadXsollaScript(): Promise<void> {
-  const win = window as WindowWithXPayStation;
-  if (win.XPayStationWidget) return Promise.resolve();
-  if (xsollaScriptPromise) return xsollaScriptPromise;
-
-  xsollaScriptPromise = new Promise<void>((resolve, reject) => {
-    const scriptId = "xsolla-widget-script";
-    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
-    const script = existing ?? document.createElement("script");
-
-    const timeoutId = window.setTimeout(() => {
-      xsollaScriptPromise = null; // اسمح بإعادة المحاولة
-      reject(new Error("انتهت مهلة تحميل بوابة الدفع، تحقق من اتصالك بالإنترنت"));
-    }, 15000);
-
-    const onLoad = () => {
-      window.clearTimeout(timeoutId);
-      resolve();
-    };
-    const onError = () => {
-      window.clearTimeout(timeoutId);
-      script.remove();
-      xsollaScriptPromise = null; // اسمح بإعادة المحاولة
-      reject(new Error("فشل تحميل بوابة الدفع"));
-    };
-
-    script.addEventListener("load", onLoad, { once: true });
-    script.addEventListener("error", onError, { once: true });
-
-    if (!existing) {
-      script.id = scriptId;
-      script.type = "text/javascript";
-      script.async = true;
-      script.src = "https://cdn.xsolla.net/payments-bucket-prod/embed/1.5.0/widget.min.js";
-      document.head.appendChild(script);
-    }
-  });
-
-  return xsollaScriptPromise;
-}
-
 export default function BuyCoins({ onClose }: { onClose?: () => void }) {
   const [selectedPkg, setSelectedPkg] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("select");
   const [errorMsg, setErrorMsg] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
-
-  // ✅ M2 fix: مرجع دائم لآخر قيمة للـ step — الـ close handler بتاع
-  // الـ Widget كان بيقرأ نسخة قديمة (stale closure) من الـ state
   const stepRef = useRef<Step>(step);
+
   useEffect(() => {
     stepRef.current = step;
   }, [step]);
 
-  // ✅ M2 fix: تسجيل الـ close handler مرة واحدة فقط + فصله عند الـ unmount
-  const closeHandlerAttachedRef = useRef(false);
-  const widgetCloseHandlerRef = useRef<(() => void) | null>(null);
-
-  const attachWidgetCloseHandler = useCallback((XPayStationWidget: XPayStationWidgetType) => {
-    if (closeHandlerAttachedRef.current) return;
-
-    const handler = () => {
-      // نقرأ أحدث قيمة من الـ ref وليس من الـ closure
-      if (stepRef.current !== "success") setStep("select");
-    };
-    widgetCloseHandlerRef.current = handler;
-    XPayStationWidget.on("close", handler);
-    closeHandlerAttachedRef.current = true;
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      const XPayStationWidget = (window as WindowWithXPayStation).XPayStationWidget;
-      if (XPayStationWidget?.off && widgetCloseHandlerRef.current) {
-        try {
-          XPayStationWidget.off("close", widgetCloseHandlerRef.current);
-        } catch {
-          /* الـ widget قد يكون اتشال بالفعل */
-        }
-      }
-      closeHandlerAttachedRef.current = false;
-      widgetCloseHandlerRef.current = null;
-    };
-  }, []);
-
-  // جلب الـ ID الخاص بالمستخدم الحالي + تحميل مسبق للـ script
   useEffect(() => {
     let cancelled = false;
     supabase.auth.getUser().then(({ data }) => {
       if (!cancelled) setUserId(data.user?.id || null);
-    });
-    loadXsollaScript().catch(() => {
-      /* تحميل مسبق فقط — الخطأ الفعلي يُعالج داخل handleBuy */
     });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // 🛡️ المراقبة اللحظية للرصيد (لإظهار شاشة النجاح فور إضافة السيرفر للكوينز)
   useEffect(() => {
     if (!userId) return;
 
     const subscription = supabase
       .channel(`buy-coins-update-${userId}`)
       .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'users_coins', filter: `user_id=eq.${userId}` },
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "users_coins",
+          filter: `user_id=eq.${userId}`,
+        },
         () => {
-          // ✅ M2 fix: لا نعرض "نجاح" إلا لو فعلاً في عملية دفع جارية —
-          // كان أي تحديث للرصيد (حتى الصرف) يعرض شاشة "تم الشحن بنجاح"
           if (stepRef.current === "loading" || stepRef.current === "awaiting_payment") {
             setStep("success");
           }
-        }
+        },
       )
       .subscribe();
 
-    return () => { supabase.removeChannel(subscription); };
+    return () => {
+      supabase.removeChannel(subscription);
+    };
   }, [userId]);
 
   const handleBuy = async () => {
@@ -153,57 +63,39 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
     setErrorMsg("");
 
     try {
-      // 1. جيب التوكن من السيرفر
-      const { data, error } = await supabase.functions.invoke("create-xsolla-payment", {
+      const { data, error } = await supabase.functions.invoke("create-checkout", {
         body: { packageId: selectedPkg },
       });
 
       if (error) throw error;
-      if (!data?.token) throw new Error("لم يتم استلام توكن الدفع من الخادم");
+      if (!data?.checkout_url) throw new Error("لم يتم تجهيز رابط الدفع");
 
-      // 2. انتظر الـ script يتحمل (الآن مع timeout ومعالجة فشل حقيقية)
-      await loadXsollaScript();
-
-      const XPayStationWidget = (window as WindowWithXPayStation).XPayStationWidget;
-
-      if (XPayStationWidget) {
-        // ✅ يتسجل مرة واحدة فقط مهما تكررت محاولات الشراء
-        attachWidgetCloseHandler(XPayStationWidget);
-
-        XPayStationWidget.init({
-          access_token: data.token,
-          sandbox: true,
-          lightbox: {
-            width: "100%",
-            height: "100%",
-            zIndex: 999999,
-          },
-        });
-        XPayStationWidget.open();
-        setStep("awaiting_payment");
-      } else {
-        // خطة بديلة لو الـ widget مش شغال
-        window.open(
-          `https://sandbox-secure.xsolla.com/paystation4/?token=${data.token}`,
-          "_blank",
-          "width=820,height=720"
-        );
-        setStep("awaiting_payment");
-      }
+      window.location.assign(data.checkout_url);
+      setStep("awaiting_payment");
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "حدث خطأ غير متوقع أثناء معالجة الطلب");
+      setErrorMsg(err instanceof Error ? err.message : "حدث خطأ غير متوقع أثناء تجهيز الدفع");
       setStep("error");
     }
   };
 
-  const pkg = PACKAGES.find(p => p.id === selectedPkg);
+  const pkg = PACKAGES.find((item) => item.id === selectedPkg);
 
   return (
-    <div style={{ minHeight: "100dvh", background: "#05050c", color: "#fff", padding: "32px 16px 120px", fontFamily: "'Cairo', sans-serif", direction: "rtl", position: "relative" }}>
+    <div
+      style={{
+        minHeight: "100dvh",
+        background: "#05050c",
+        color: "#fff",
+        padding: "32px 16px 120px",
+        fontFamily: "'Cairo', sans-serif",
+        direction: "rtl",
+        position: "relative",
+      }}
+    >
       <style>{STYLES}</style>
 
       {onClose && (
-        <button onClick={onClose} className="bc-close-btn">✕</button>
+        <button onClick={onClose} className="bc-close-btn" aria-label="إغلاق">✕</button>
       )}
 
       {step === "success" ? (
@@ -211,36 +103,47 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
           <div style={{ fontSize: 60, marginBottom: 16 }}>🎉</div>
           <h2 style={{ color: "#10b981", fontSize: 24, fontWeight: 800 }}>تم الشحن بنجاح!</h2>
           <p style={{ color: "rgba(255,255,255,0.6)", marginTop: 8 }}>تمت إضافة الكوينز إلى محفظتك.</p>
-          <button onClick={onClose} className="bc-submit-btn" style={{ maxWidth: 200, marginTop: 24 }}>العودة للتطبيق</button>
+          <button onClick={onClose} className="bc-submit-btn" style={{ maxWidth: 200, marginTop: 24 }}>
+            العودة للتطبيق
+          </button>
         </div>
       ) : (
         <>
           <div style={{ textAlign: "center", marginBottom: 40, marginTop: onClose ? 20 : 0 }}>
             <div style={{ fontSize: 52, filter: "drop-shadow(0 4px 15px rgba(255,215,0,0.3))", animation: "bc-float 3s ease-in-out infinite" }}>🪙</div>
-            <h1 style={{ fontSize: 26, fontWeight: 800, margin: "12px 0 0", background: "linear-gradient(135deg,#fff,#a78bfa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>متجر الكوينز الرقمي</h1>
-            <p style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.9rem", marginTop: 4 }}>اشحن رصيدك فوراً بدعم المحافظ الإلكترونية المصرية وفوري</p>
+            <h1 style={{ fontSize: 26, fontWeight: 800, margin: "12px 0 0", background: "linear-gradient(135deg,#fff,#a78bfa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+              متجر الكوينز الرقمي
+            </h1>
+            <p style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.9rem", marginTop: 4 }}>
+              ادفع بأمان عبر Stripe واستلم الكوينز بعد تأكيد الدفع
+            </p>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 16, maxWidth: 540, margin: "0 auto 40px" }}>
-            {PACKAGES.map(p => (
-              <div key={p.id} onClick={() => setSelectedPkg(p.id)} className={`bc-pkg-card ${selectedPkg === p.id ? 'active' : ''}`} style={{ '--pkg-color': p.color } as React.CSSProperties}>
-                {p.popular && <div className="bc-popular-badge">الأكثر طلباً 🔥</div>}
-                <div className="bc-pkg-emoji">{p.emoji}</div>
-                <div className="bc-pkg-coins">{p.coins.toLocaleString()}</div>
+            {PACKAGES.map((item) => (
+              <div
+                key={item.id}
+                onClick={() => setSelectedPkg(item.id)}
+                className={`bc-pkg-card ${selectedPkg === item.id ? "active" : ""}`}
+                style={{ "--pkg-color": item.color } as React.CSSProperties}
+              >
+                {item.popular && <div className="bc-popular-badge">الأكثر طلباً 🔥</div>}
+                <div className="bc-pkg-emoji">{item.emoji}</div>
+                <div className="bc-pkg-coins">{item.coins.toLocaleString()}</div>
                 <div className="bc-pkg-lbl">كوينز</div>
-                <div className="bc-pkg-price">{p.price} جنيه</div>
+                <div className="bc-pkg-price">{item.price} جنيه</div>
               </div>
             ))}
           </div>
 
           {selectedPkg && (
-            <div className="bc-form-container" style={{ textAlign: 'center' }}>
+            <div className="bc-form-container" style={{ textAlign: "center" }}>
               <p style={{ fontSize: "0.95rem", color: "rgba(255,255,255,0.7)", marginBottom: 16 }}>
                 لقد اخترت باقة <strong style={{ color: pkg?.color }}>{pkg?.coins} كوينز</strong> بمبلغ {pkg?.price} جنيه مصري.
               </p>
               {errorMsg && <p className="bc-error-text">{errorMsg}</p>}
               <button onClick={handleBuy} className="bc-submit-btn">
-                الانتقال لخيارات الدفع الآمنة 🚀
+                الانتقال للدفع الآمن عبر Stripe 🚀
               </button>
             </div>
           )}
@@ -250,7 +153,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
       {step === "loading" && (
         <div className="bc-loading-overlay">
           <div className="bc-spinner" />
-          <span>جاري تحضير واجهة الدفع من Xsolla...</span>
+          <span>جاري تجهيز الدفع الآمن...</span>
         </div>
       )}
 
@@ -284,20 +187,8 @@ const STYLES = `
   .bc-error-text { color: #f87171; font-size: 0.8rem; margin-bottom: 14px; text-align: center; font-weight: 600; }
   .bc-submit-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border: none; border-radius: 16px; color: #fff; font-size: 1rem; font-weight: 700; cursor: pointer; font-family: 'Cairo', sans-serif; transition: all 0.2s; box-shadow: 0 6px 20px rgba(99,102,241,0.3); }
   .bc-submit-btn:active { transform: scale(0.97); }
-  .bc-loading-overlay { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(5,5,10,0.85); backdrop-filter: blur(12px); border-radius: inherit; }
+  .bc-loading-overlay { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(5,5,10,0.92); backdrop-filter: blur(12px); }
   .bc-loading-overlay span { font-size: 0.95rem; color: rgba(255,255,255,0.7); font-weight: 600; margin-top: 16px; }
   .bc-spinner { width: 36px; height: 36px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #6366f1; border-radius: 50%; animation: bc-spin 0.8s linear infinite; }
   .bc-err-retry-btn { margin-top: 24px; padding: 10px 24px; border: none; border-radius: 12px; background: rgba(255,255,255,0.08); color: #fff; font-weight: 600; cursor: pointer; font-family: 'Cairo', sans-serif; }
-
-  /* 🛠️ تعديل إضافي: إجبار الـ Iframe والـ Elements المحقونة من إكسولا على أخذ كامل مساحة الشاشة وإلغاء أي قص */
-  div[class*="xsolla"], iframe[id*="xsolla"], #xsolla-paystation-widget {
-    position: fixed !important;
-    top: 0 !important;
-    left: 0 !important;
-    width: 100vw !important;
-    height: 100vh !important;
-    z-index: 999999 !important;
-    max-width: 100% !important;
-    max-height: 100% !important;
-  }
 `;
