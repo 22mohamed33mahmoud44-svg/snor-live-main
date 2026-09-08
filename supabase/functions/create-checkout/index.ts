@@ -12,7 +12,7 @@ const PRICE_IDS: Record<string, string | undefined> = {
   pkg_1000: Deno.env.get("STRIPE_PRICE_1000_COINS"),
 };
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
     const supabase = createClient(
