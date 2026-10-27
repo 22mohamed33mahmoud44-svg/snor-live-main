@@ -1,6 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@12.0.0?target=deno";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, {
   apiVersion: "2023-10-16",
   httpClient: Stripe.createFetchHttpClient(),
@@ -13,6 +19,10 @@ const PRICE_IDS: Record<string, string | undefined> = {
 };
 
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
     const supabase = createClient(
@@ -25,7 +35,7 @@ Deno.serve(async (req) => {
     if (userError || !user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -33,18 +43,24 @@ Deno.serve(async (req) => {
     const priceId = PRICE_IDS[packageId];
 
     if (!priceId) {
-      return new Response(JSON.stringify({ error: "Stripe price is not configured for this package" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ error: "Stripe price is not configured for this package" }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     const appUrl = Deno.env.get("APP_URL");
     if (!appUrl) {
-      return new Response(JSON.stringify({ error: "APP_URL is not configured" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ error: "APP_URL is not configured" }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -58,13 +74,18 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({ session_id: session.id, checkout_url: session.url }),
-      { headers: { "Content-Type": "application/json" } },
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (error) {
     console.error("create-checkout error:", error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Internal Server Error" }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({
+        error: error instanceof Error ? error.message : "Internal Server Error",
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
     );
   }
 });
