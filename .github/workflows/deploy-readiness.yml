@@ -1,6 +1,44 @@
 name: Deploy Readiness
 
+on:name: Deploy Readiness
+
 on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Verify deploy/database readiness
+        run: node scripts/verify-deploy-readiness.mjs
+
+      - name: Typecheck app
+        run: npm run typecheck
+
+      - name: Build app
+        run: npm run build
   workflow_dispatch:
   push:
     branches:
