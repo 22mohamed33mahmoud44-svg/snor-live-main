@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useDailyBonus } from '../hooks/useDailyBonus';
 
 export default function DailyBonusPopup({ onClose }: { onClose: () => void }) {
@@ -9,7 +9,8 @@ export default function DailyBonusPopup({ onClose }: { onClose: () => void }) {
 
   const handleClaim = async () => {
     setLoading(true);
-    const { data } = await claimBonus();
+        const res = await claimBonus();
+        const data = res?.data;
     setResult(data);
     setClaimed(true);
     setLoading(false);
