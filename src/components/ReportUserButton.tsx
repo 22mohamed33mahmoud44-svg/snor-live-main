@@ -26,7 +26,7 @@ export default function ReportUserButton({ reportedId, streamId, onClose }: Repo
   const handleSubmit = async () => {
     if (!selectedReason) return;
     setLoading(true);
-    const { data } = await supabase.rpc('submit_report', {
+    await supabase.rpc('submit_report', {
       p_reported_id: reportedId || null,
       p_stream_id: streamId || null,
       p_reason: selectedReason,
