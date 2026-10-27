@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useNotifications } from '../hooks/useNotifications';
 
 const iconMap: Record<string, string> = {
