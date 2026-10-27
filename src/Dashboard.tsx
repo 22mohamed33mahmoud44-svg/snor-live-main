@@ -1,13 +1,5 @@
-import { useNotifications } from './hooks/useNotifications';
-import { useDailyBonus } from './hooks/useDailyBonus';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
-const NotificationsPanel = lazy(() => import('./components/NotificationsPanel'));
-const BottomNav = lazy(() => import('./components/BottomNav'));
-const MissionsPage = lazy(() => import('./pages/MissionsPage'));
-const VIPPage = lazy(() => import('./pages/VIPPage'));
-const SearchPage = lazy(() => import('./pages/SearchPage'));
-
-import { useState, useEffect, useCallback, useRef, memo, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { supabase } from './supabase';
 
 // ── Components ──────────────────────────────────────────────────
@@ -32,12 +24,6 @@ import { GLOBAL_CSS } from './constants/styles';
 // ── MAIN DASHBOARD ───────────────────────────────────────────────
 export default function Dashboard({ userId = 'me', onLogout = () => {} }: DashboardProps) {
   // ── Phase 11: New feature states ──
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [showMissions, setShowMissions] = useState(false);
-  const [showVIP, setShowVIP] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
-  const { unreadCount } = useNotifications();
-  const { claimBonus } = useDailyBonus();
   useOnlineStatus();
 
   // ⚡ تم نقل الحالات (States) الفرعية للمكونات الخاصة بها، وبقيت الحالات العامة فقط هنا
