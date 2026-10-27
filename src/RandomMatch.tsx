@@ -149,8 +149,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       // الـRPC هي المصدر الأساسي للحقيقة.
       const result = await startMatching(userId);
 
-      if (phaseRef.current !== 'waiting') return;
-
+          if ((phaseRef.current as string) !== 'waiting') return;
       if (result.status === 'matched' && result.match) {
         handleMatchFound(result.match);
         return;
