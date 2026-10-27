@@ -8,7 +8,7 @@ const tierColors: Record<string, string> = {
 const tierEmoji: Record<string, string> = { silver: '🥈', gold: '🥇', diamond: '💎' };
 
 export default function VIPPage({ onClose }: { onClose: () => void }) {
-  const { vipData, pricing, loading, isVIP, subscribe } = useVIP();
+  const { vipData, pricing, isVIP, subscribe } = useVIP();
 
   const grouped = pricing.reduce((acc: any, p: any) => {
     if (!acc[p.tier]) acc[p.tier] = [];
