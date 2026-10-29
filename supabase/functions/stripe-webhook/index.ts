@@ -57,31 +57,26 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  const { error: eventError } = await supabase
-    .from("stripe_events")
-    .insert({ stripe_event_id: event.id, type: event.type });
+  // Single database transaction: deduplication and wallet credit succeed or fail together.
+  const { data: credited, error: creditError } = await supabase.rpc(
+    "credit_stripe_checkout_event",
+    {
+      p_event_id: event.id,
+      p_event_type: event.type,
+      p_user_id: userId,
+      p_coins: coinsToAdd,
+      p_session_id: session.id,
+      p_package_id: packageId,
+    },
+  );
 
-  if (eventError) {
-    if (eventError.code === "23505") {
-      return new Response("Already processed", { status: 200 });
-    }
-    return new Response("Failed to record event", { status: 500 });
+  if (creditError) {
+    console.error("credit_stripe_checkout_event failed", creditError);
+    return new Response("Failed to credit coins", { status: 500 });
   }
 
-  const { error: coinsError } = await supabase.rpc("add_coins", {
-    p_user_id: userId,
-    p_amount: coinsToAdd,
-    p_meta: {
-      stripe_event_id: event.id,
-      stripe_session_id: session.id,
-      package_id: packageId,
-    },
-  });
-
-  if (coinsError) {
-    console.error("add_coins failed", coinsError);
-    await supabase.from("stripe_events").delete().eq("stripe_event_id", event.id);
-    return new Response("Failed to credit coins", { status: 500 });
+  if (!credited) {
+    return new Response("Already processed", { status: 200 });
   }
 
   return new Response(JSON.stringify({ received: true, result: "success" }), {
