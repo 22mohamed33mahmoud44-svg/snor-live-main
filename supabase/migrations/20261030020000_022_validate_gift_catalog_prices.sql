@@ -180,7 +180,8 @@ AS $function$
       IF v_viewer_id IS NULL THEN RAISE EXCEPTION 'Unauthorized'; END IF;
 
       -- جلب بيانات البث الخاص
-      SELECT * INTO v_show FROM paid_shows WHERE id = p_show_id AND is_active = true;
+      -- Serialize purchases to enforce capacity and prevent duplicate charge races.
+      SELECT * INTO v_show FROM paid_shows WHERE id = p_show_id AND is_active = true FOR UPDATE;
       IF NOT FOUND THEN
         RETURN jsonb_build_object('success', false, 'error', 'show_not_found_or_ended');
       END IF;
@@ -220,14 +221,18 @@ AS $function$
         RETURN jsonb_build_object('success', false, 'error', 'invalid_gift_count');
       END IF;
 
-      -- Each gift uses the canonical single-item price. The whole function
-      -- executes in one transaction, including the eventual access grant.
+      -- A PL/pgSQL exception block creates a subtransaction. On failure,
+      -- even the *earlier* successful gifts in this bundle are rolled back.
+      BEGIN
+      -- Each gift is charged at its catalog price.
       FOR v_purchase_count IN 1..v_show.required_gift_count LOOP
         v_result := public.send_gift(
           v_viewer_id, v_show.streamer_id, p_gift_type, v_gift_cost
         );
         IF NOT coalesce((v_result->>'success')::boolean, false) THEN
-          RETURN v_result;
+          RAISE EXCEPTION USING
+            ERRCODE = 'PZ001',
+            MESSAGE = 'One of the paid-show gift purchases failed';
         END IF;
         v_gift_id := (v_result->>'gift_id')::uuid;
       END LOOP;
@@ -240,6 +245,10 @@ AS $function$
       INSERT INTO notifications (user_id, type, title, data)
       VALUES (v_show.streamer_id, 'gift', '🎭 مشاهد جديد دخل البث الخاص!',
         jsonb_build_object('viewer_id', v_viewer_id, 'gift_type', p_gift_type, 'show_id', p_show_id));
+
+      EXCEPTION WHEN SQLSTATE 'PZ001' THEN
+        RETURN v_result;
+      END;
 
       RETURN jsonb_build_object(
         'success', true, 'access_granted', true,
