@@ -20,6 +20,8 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
+  if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+
   try {
     const body = await req.json().catch(() => ({}));
     const room = typeof body?.room === 'string' ? body.room.trim() : '';
@@ -47,13 +49,7 @@ Deno.serve(async (req: Request) => {
     let canPublish = false;
     let authorized = false;
 
-    if (room.startsWith('snor_call_')) {
-      const embedded = room.match(new RegExp(UUID_RE.source.slice(1, -1), 'gi')) ?? [];
-      if (embedded.some((id: string) => id.toLowerCase() === user.id.toLowerCase())) {
-        authorized = true;
-        canPublish = true;
-      }
-    } else if (UUID_RE.test(room)) {
+    if (UUID_RE.test(room)) {
       const { data: match } = await admin
         .from('matches')
         .select('id, user1, user2, status')
@@ -61,7 +57,7 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
 
       if (match) {
-        if ((match.user1 === user.id || match.user2 === user.id) && match.status !== 'ended') {
+        if ((match.user1 === user.id || match.user2 === user.id) && match.status === 'active') {
           authorized = true;
           canPublish = true;
         }
@@ -73,7 +69,7 @@ Deno.serve(async (req: Request) => {
           .maybeSingle();
 
         if (stream) {
-          if (stream.user_id === user.id) {
+          if (stream.user_id === user.id && stream.is_live) {
             authorized = true;
             canPublish = true;
           } else if (stream.is_live) {
