@@ -29,6 +29,9 @@ jobs:
       - name: Install app dependencies
         run: npm ci
 
+      - name: Test LiveKit authorization rules
+        run: node --test supabase/functions/livekit-token/authorization.test.mjs
+
       - name: Verify deploy/database readiness
         run: node scripts/verify-deploy-readiness.mjs
 
