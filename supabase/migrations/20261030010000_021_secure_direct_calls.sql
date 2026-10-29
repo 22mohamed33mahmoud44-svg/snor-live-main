@@ -23,7 +23,7 @@ DROP POLICY IF EXISTS "matches update participant authenticated" ON public.match
 CREATE POLICY "matches update participant authenticated"
 ON public.matches FOR UPDATE TO authenticated
 USING (
-  status = 'active'
+  status IN ('active', 'pending')
   AND (user1 = (SELECT auth.uid()) OR user2 = (SELECT auth.uid()))
 )
 WITH CHECK (
