@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Gem, Loader2 } from 'lucide-react';
+import { supabase } from '../../supabase';
 
 // تعريف بنية الهدية
 export interface GiftDef {
@@ -10,15 +11,6 @@ export interface GiftDef {
   cost: number;
 }
 
-// مصفوفة الهدايا الثابتة الخاصة بالتطبيق
-export const GIFTS: GiftDef[] = [
-  { id: 'rose', emoji: '🌹', name: 'وردة', cost: 10 },
-  { id: 'heart_box', emoji: '💝', name: 'علبة قلوب', cost: 50 },
-  { id: 'crown', emoji: '👑', name: 'تاج', cost: 200 },
-  { id: 'diamond', emoji: '💎', name: 'ماسة', cost: 500 },
-  { id: 'rocket', emoji: '🚀', name: 'صاروخ', cost: 1000 },
-  { id: 'car', emoji: '🏎️', name: 'سيارة فخمة', cost: 5000 },
-];
 
 interface LiveGiftsPanelProps {
   showGiftPanel: boolean;
@@ -35,12 +27,50 @@ export default function LiveGiftsPanel({
 }: LiveGiftsPanelProps) {
   // حالة جديدة لقفل الأزرار أثناء معالجة الطلب
   const [processingGiftId, setProcessingGiftId] = useState<string | null>(null);
+  const [gifts, setGifts] = useState<GiftDef[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   // تصفير حالة القفل في كل مرة يتم فيها فتح اللوحة لتكون جاهزة
   useEffect(() => {
     if (showGiftPanel) {
       setProcessingGiftId(null);
     }
+  }, [showGiftPanel]);
+
+  // Always load current gift names and prices from the same catalog as the
+  // server-side transfer functions. Never use a stale browser price fallback.
+  useEffect(() => {
+    if (!showGiftPanel) return;
+    let cancelled = false;
+    setCatalogLoading(true);
+    setCatalogError(null);
+    setGifts([]);
+
+    async function loadCatalog() {
+      const { data, error } = await supabase
+        .from('gift_types')
+        .select('code, emoji, name_ar, coin_cost')
+        .eq('is_active', true)
+        .order('coin_cost', { ascending: true })
+        .limit(30);
+
+      if (cancelled) return;
+      if (error || !data) {
+        console.error('Gift catalog unavailable', error);
+        setCatalogError('تعذر تحميل أسعار الهدايا؛ حاول فتح اللوحة مجدداً.');
+      } else {
+        setGifts(data.map((gift) => ({
+          id: gift.code as string,
+          emoji: (gift.emoji as string) || '🎁',
+          name: (gift.name_ar as string) || gift.code,
+          cost: gift.coin_cost as number,
+        })));
+      }
+      setCatalogLoading(false);
+    }
+    void loadCatalog();
+    return () => { cancelled = true; };
   }, [showGiftPanel]);
 
   // دالة التعامل مع الضغط الآمن
@@ -99,7 +129,10 @@ export default function LiveGiftsPanel({
 
             {/* شبكة عرض الهدايا */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-              {GIFTS.map(gift => {
+              {catalogLoading && <p style={{ color: '#fff', gridColumn: '1 / -1', textAlign: 'center' }}>جاري تحميل الهدايا...</p>}
+              {catalogError && <p role="alert" style={{ color: '#f87171', gridColumn: '1 / -1', textAlign: 'center' }}>{catalogError}</p>}
+              {!catalogLoading && !catalogError && gifts.length === 0 && <p style={{ color: '#fff', gridColumn: '1 / -1', textAlign: 'center' }}>لا توجد هدايا متاحة الآن.</p>}
+              {gifts.map(gift => {
                 const affordable = gemsBalance !== null && gemsBalance >= gift.cost;
                 const isProcessingThis = processingGiftId === gift.id;
                 // الزر يكون معطلاً إذا لم يكن هناك رصيد، أو إذا كان هناك أي هدية قيد المعالجة
