@@ -39,7 +39,7 @@ BEGIN
 
   INSERT INTO public.stripe_events (stripe_event_id, type, checkout_session_id)
   VALUES (p_event_id, p_event_type, p_session_id)
-  ON CONFLICT (stripe_event_id) DO NOTHING;
+  ON CONFLICT DO NOTHING;
 
   IF NOT FOUND THEN
     RETURN false;
