@@ -100,6 +100,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       .from('matches')
       .select('id, user1, user2, status, created_at')
       .eq('status', 'active')
+      .eq('kind', 'random')
       .or(`user1.eq.${userId},user2.eq.${userId}`)
       .gte('created_at', cutoff)
       .order('created_at', { ascending: false })
@@ -126,7 +127,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
 
       // الاشتراك اختياري للسرعة فقط. لو فشل أو تأخر، الـRPC + polling يكملان.
       const onInsert = (payload: { new: Record<string, unknown> }) => {
-        handleMatchFound(payload.new as unknown as Match);
+        if (payload.new.kind !== 'direct') handleMatchFound(payload.new as unknown as Match);
       };
 
       const channel = supabase

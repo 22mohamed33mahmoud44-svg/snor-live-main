@@ -29,6 +29,9 @@ jobs:
       - name: Install app dependencies
         run: npm ci
 
+      - name: Test LiveKit authorization rules
+        run: node --test supabase/functions/livekit-token/authorization.test.mjs
+
       - name: Verify deploy/database readiness
         run: node scripts/verify-deploy-readiness.mjs
 
@@ -37,3 +40,39 @@ jobs:
 
       - name: Build app
         run: npm run build
+  direct-call-database-tests:
+    name: Test direct-call consent and RLS on disposable PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Test direct-call migration, RLS and consent
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/direct_calls_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030010000_021_secure_direct_calls.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/direct_calls_assertions.sql

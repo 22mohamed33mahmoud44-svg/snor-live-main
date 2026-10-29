@@ -1,6 +1,7 @@
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { supabase } from './supabase';
+import { createPortal } from 'react-dom';
 
 // ── Components ──────────────────────────────────────────────────
 import { CoinsBalance } from './components/CoinsBalance';
@@ -32,6 +33,9 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   
   const [openChat, setOpenChat] = useState<ChatOther | null>(null);
   const [activeCall, setActiveCall] = useState<CallState | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{ id: string; callerId: string } | null>(null);
+  const [outgoingCall, setOutgoingCall] = useState<{ id: string; remoteId: string; type: 'video' | 'audio'; startedAt: number } | null>(null);
+  const [callError, setCallError] = useState<string | null>(null);
   const [showRandomMatch, setShowRandomMatch] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
@@ -43,11 +47,152 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   const [activeLiveStream, setActiveLiveStream] = useState<{ id: string, title: string; filterId: string; stream?: MediaStream | null } | null>(null);
 
   // ── Handlers ─────────────────────────────────────────────────
-  const handleStartCall = useCallback((remoteId: string, type: 'video' | 'audio') => {
+  // A direct call is a pending database invitation, not a client-generated LiveKit room.
+  const handleStartCall = useCallback(async (remoteId: string, type: 'video' | 'audio') => {
+    setCallError(null);
+    const { data: matchId, error } = await supabase.rpc('create_direct_call', { p_callee: remoteId });
+    if (error || !matchId) {
+      console.error('Could not create direct call', error);
+      setCallError('تعذر بدء المكالمة. تأكد من وجود محادثة سابقة مع المستخدم وأنه غير مشغول.');
+      return;
+    }
     playRadarSound();
-    const GeneratedMatchId = `snor_call_${userId}_${remoteId}_${Date.now()}`;
-    setActiveCall({ matchId: GeneratedMatchId, remoteUserId: remoteId, type });
-  }, [userId]);
+    setOutgoingCall({ id: String(matchId), remoteId, type, startedAt: Date.now() });
+  }, []);
+
+  // Incoming invitations: filtered realtime plus polling if the websocket is unavailable.
+  useEffect(() => {
+    let cancelled = false;
+    if (activeCall) return;
+
+    const checkIncoming = async () => {
+      const cutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+      const { data, error } = await supabase.from('matches')
+        .select('id, user1')
+        .eq('kind', 'direct')
+        .eq('status', 'pending')
+        .eq('user2', userId)
+        .gte('created_at', cutoff)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!cancelled && !error) {
+        setIncomingCall(data ? { id: data.id, callerId: data.user1 } : null);
+      }
+    };
+
+    void checkIncoming();
+    const interval = setInterval(() => { void checkIncoming(); }, 4000);
+    const channel = supabase.channel(`incoming-direct-calls-${userId}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'matches',
+        filter: `user2=eq.${userId}`,
+      }, () => { void checkIncoming(); })
+      .subscribe();
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      void supabase.removeChannel(channel);
+    };
+  }, [userId, activeCall]);
+
+  // Do not request a LiveKit token until the recipient has explicitly accepted.
+  useEffect(() => {
+    if (!outgoingCall) return;
+    let cancelled = false;
+    const checkOutgoing = async () => {
+      const { data, error } = await supabase.from('matches')
+        .select('status')
+        .eq('id', outgoingCall.id)
+        .eq('kind', 'direct')
+        .maybeSingle();
+      if (cancelled) return;
+      if (!error && data?.status === 'active') {
+        setOutgoingCall(null);
+        setOpenChat(null);
+        setActiveCall({ matchId: outgoingCall.id, remoteUserId: outgoingCall.remoteId, type: outgoingCall.type });
+      } else if (!error && (!data || data.status === 'ended')) {
+        setOutgoingCall(null);
+        setCallError('المكالمة رُفضت أو أُلغيت.');
+      } else if (Date.now() - outgoingCall.startedAt > 2 * 60 * 1000) {
+        setOutgoingCall(null);
+        setCallError('انتهت مهلة انتظار الرد على المكالمة.');
+        void supabase.from('matches').update({ status: 'ended' }).eq('id', outgoingCall.id).eq('status', 'pending');
+      }
+    };
+    void checkOutgoing();
+    const interval = setInterval(() => { void checkOutgoing(); }, 2000);
+    const channel = supabase.channel(`outgoing-direct-call-${outgoingCall.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'matches',
+        filter: `id=eq.${outgoingCall.id}`,
+      }, () => { void checkOutgoing(); })
+      .subscribe();
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      void supabase.removeChannel(channel);
+    };
+  }, [outgoingCall]);
+
+  const respondToCall = async (accept: boolean) => {
+    const invitation = incomingCall;
+    if (!invitation) return;
+    setIncomingCall(null);
+    const { data, error } = await supabase.rpc('respond_direct_call', {
+      p_match_id: invitation.id,
+      p_accept: accept,
+    });
+    if (error || !data) {
+      setCallError('تعذر الرد على المكالمة؛ ربما انتهت المهلة.');
+      return;
+    }
+    if (accept) {
+      setOpenChat(null);
+      setActiveCall({ matchId: invitation.id, remoteUserId: invitation.callerId, type: 'video' });
+    }
+  };
+
+  const cancelOutgoingCall = async () => {
+    const invitation = outgoingCall;
+    if (!invitation) return;
+    setOutgoingCall(null);
+    const { error } = await supabase.from('matches')
+      .update({ status: 'ended' })
+      .eq('id', invitation.id)
+      .eq('status', 'pending');
+    if (error) console.error('Could not cancel direct call', error);
+  };
+
+  const callOverlay = (incomingCall || outgoingCall || callError) && typeof document !== 'undefined'
+    ? createPortal(
+      <div dir="rtl" style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,.75)', display: 'grid', placeItems: 'center', padding: 20 }}>
+        <div role="dialog" aria-modal="true" aria-label="المكالمات" style={{ width: 'min(420px,100%)', padding: 26, borderRadius: 22, background: '#17152b', color: 'white', textAlign: 'center', boxShadow: '0 15px 70px #0008' }}>
+          {incomingCall ? (
+            <>
+              <h3>مكالمة واردة</h3>
+              <p>هناك مستخدم يطلب مكالمة معك. هل تريد قبولها؟</p>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button type="button" onClick={() => { void respondToCall(true); }}>قبول</button>
+                <button type="button" onClick={() => { void respondToCall(false); }}>رفض</button>
+              </div>
+            </>
+          ) : outgoingCall ? (
+            <>
+              <h3>بانتظار رد الطرف الآخر</h3>
+              <p>سيبدأ الاتصال بعد قبول الدعوة.</p>
+              <button type="button" onClick={() => { void cancelOutgoingCall(); }}>إلغاء الاتصال</button>
+            </>
+          ) : (
+            <>
+              <p role="alert">{callError}</p>
+              <button type="button" onClick={() => setCallError(null)}>حسناً</button>
+            </>
+          )}
+        </div>
+      </div>,
+      document.body,
+    ) : null;
 
   const handleLaunchLiveStream = async (title: string, filterId: string, _intensity?: number, stream?: MediaStream | null) => {
     const { data, error } = await supabase
@@ -79,27 +224,31 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
 
   // ── Screen Router ─────────────────────────────────────────────
   if (activeCall) return <VideoCall userId={userId} matchId={activeCall.matchId} onEnd={() => setActiveCall(null)} onNext={() => { setActiveCall(null); setShowRandomMatch(true); }} />;
-  if (showRandomMatch) return <RandomMatch userId={userId} onClose={() => setShowRandomMatch(false)} onMatch={(match) => { setShowRandomMatch(false); const remoteUserId = match.user1 === userId ? match.user2 : match.user1; setActiveCall({ matchId: match.id, remoteUserId, type: 'video' }); }} />;
-  if (openChat) return <PrivateChat myId={userId} other={openChat} onBack={() => setOpenChat(null)} onStartCall={handleStartCall} />;
-  if (showSettings) return <SettingsPanel onClose={() => setShowSettings(false)} myProfile={myProfile} onLogout={onLogout} onOpenEdit={() => { setShowSettings(false); setShowEditProfile(true); }} />;
-  if (showEditProfile) return <EditProfileModal myProfile={myProfile} onClose={() => setShowEditProfile(false)} onProfileUpdated={(updated) => setMyProfile(updated)} />;
-  if (showBuyCoins) return <BuyCoins onClose={() => setShowBuyCoins(false)} />;
+  if (showRandomMatch) return <><RandomMatch userId={userId} onClose={() => setShowRandomMatch(false)} onMatch={(match) => { setShowRandomMatch(false); const remoteUserId = match.user1 === userId ? match.user2 : match.user1; setActiveCall({ matchId: match.id, remoteUserId, type: 'video' }); }} />{callOverlay}</>;
+  if (openChat) return <><PrivateChat myId={userId} other={openChat} onBack={() => setOpenChat(null)} onStartCall={handleStartCall} />{callOverlay}</>;
+  if (showSettings) return <><SettingsPanel onClose={() => setShowSettings(false)} myProfile={myProfile} onLogout={onLogout} onOpenEdit={() => { setShowSettings(false); setShowEditProfile(true); }} />{callOverlay}</>;
+  if (showEditProfile) return <><EditProfileModal myProfile={myProfile} onClose={() => setShowEditProfile(false)} onProfileUpdated={(updated) => setMyProfile(updated)} />{callOverlay}</>;
+  if (showBuyCoins) return <><BuyCoins onClose={() => setShowBuyCoins(false)} />{callOverlay}</>;
   
   if (activeLiveStream) {
     return (
+      <>
       <ActiveLiveRoom streamId={activeLiveStream.id} title={activeLiveStream.title} filterId={activeLiveStream.filterId} initialStream={activeLiveStream.stream} myUserId={userId} myUsername={myProfile?.full_name || "مستضيف البث"}
         onEndStream={async () => {
           await supabase.from('live_streams').update({ is_live: false }).eq('id', activeLiveStream.id);
           setActiveLiveStream(null);
         }} 
       />
+      {callOverlay}
+      </>
     );
   }
   
-  if (showLiveStudio) return <LiveStreamStudio onClose={() => setShowLiveStudio(false)} onStart={handleLaunchLiveStream} />;
+  if (showLiveStudio) return <><LiveStreamStudio onClose={() => setShowLiveStudio(false)} onStart={handleLaunchLiveStream} />{callOverlay}</>;
 
   // ── Render ────────────────────────────────────────────────────
   return (
+    <>
     <div className="dashboard-shell">
       <style>{GLOBAL_CSS}</style>
 
@@ -151,6 +300,8 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
         ))}
       </nav>
     </div>
+    {callOverlay}
+    </>
   );
 }
 
