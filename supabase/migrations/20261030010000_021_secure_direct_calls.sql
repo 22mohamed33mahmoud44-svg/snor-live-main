@@ -13,6 +13,16 @@ ALTER TABLE public.matches
   ADD CONSTRAINT matches_kind_check
   CHECK (kind IN ('random', 'direct'));
 
+-- Existing authenticated INSERT access is only for the random matching flow.
+-- Direct call invitations must be created by create_direct_call(), not forged by clients.
+DROP POLICY IF EXISTS matches_insert_waiting_pair ON public.matches;
+CREATE POLICY matches_insert_waiting_pair ON public.matches
+FOR INSERT TO authenticated
+WITH CHECK (
+  kind = 'random' AND status = 'active'
+  AND app_private.can_create_direct_match(user1, user2)
+);
+
 CREATE INDEX IF NOT EXISTS matches_direct_pending_recipient_idx
   ON public.matches (user2, created_at DESC)
   WHERE kind = 'direct' AND status = 'pending';
@@ -45,12 +55,13 @@ BEGIN
     RAISE EXCEPTION 'Unauthorized direct call';
   END IF;
 
-  -- Serialize invitations between the same two participants.
+  -- Lock each participant in a fixed order to serialize concurrent calls,
+  -- including two different callers inviting the same recipient.
   PERFORM pg_catalog.pg_advisory_xact_lock(
-    pg_catalog.hashtextextended(
-      LEAST(v_caller::text, p_callee::text) || ':' ||
-      GREATEST(v_caller::text, p_callee::text), 0
-    )
+    pg_catalog.hashtextextended('direct-call-user:' || LEAST(v_caller::text, p_callee::text), 0)
+  );
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('direct-call-user:' || GREATEST(v_caller::text, p_callee::text), 0)
   );
 
   IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = p_callee) THEN
