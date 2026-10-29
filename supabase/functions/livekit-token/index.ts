@@ -1,5 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { AccessToken } from 'npm:livekit-server-sdk@2';
+import { authorizeRoom } from './authorization.mjs';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -12,8 +13,6 @@ const json = (body: unknown, status: number) =>
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -46,39 +45,29 @@ Deno.serve(async (req: Request) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    let canPublish = false;
-    let authorized = false;
-
-    if (UUID_RE.test(room)) {
-      const { data: match } = await admin
-        .from('matches')
-        .select('id, user1, user2, status')
-        .eq('id', room)
-        .maybeSingle();
-
-      if (match) {
-        if ((match.user1 === user.id || match.user2 === user.id) && match.status === 'active') {
-          authorized = true;
-          canPublish = true;
-        }
-      } else {
-        const { data: stream } = await admin
-          .from('live_streams')
-          .select('id, user_id, is_live')
-          .eq('id', room)
+    // The database is authoritative for authorization; lookup failures must deny access.
+    const { authorized, canPublish, kind } = await authorizeRoom(
+      room,
+      user.id,
+      async (roomId: string) => {
+        const { data, error } = await admin
+          .from('matches')
+          .select('user1, user2, status')
+          .eq('id', roomId)
           .maybeSingle();
-
-        if (stream) {
-          if (stream.user_id === user.id && stream.is_live) {
-            authorized = true;
-            canPublish = true;
-          } else if (stream.is_live) {
-            authorized = true;
-            canPublish = false;
-          }
-        }
-      }
-    }
+        if (error) throw error;
+        return data;
+      },
+      async (roomId: string) => {
+        const { data, error } = await admin
+          .from('live_streams')
+          .select('user_id, is_live')
+          .eq('id', roomId)
+          .maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+    );
 
     if (!authorized) {
       return json({ error: 'Forbidden: not a participant of this room' }, 403);
@@ -102,7 +91,8 @@ Deno.serve(async (req: Request) => {
     const at = new AccessToken(apiKey, apiSecret, {
       identity: user.id,
       name: displayName,
-      ttl: '2h',
+      // Short-lived call join tokens reduce how long an ended room can be rejoined.
+      ttl: kind === 'match' ? '10m' : '2h',
       metadata: JSON.stringify({ profile_name: displayName }),
     });
 
