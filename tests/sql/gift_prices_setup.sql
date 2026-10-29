@@ -98,9 +98,12 @@ $$;
 
 -- This is the existing public wrapper used in production.
 CREATE OR REPLACE FUNCTION public.send_gift(uuid,uuid,text,integer)
-RETURNS jsonb LANGUAGE sql AS $$
-  SELECT app_private.send_gift($1,$2,$3,$4);
-$$;
+RETURNS jsonb LANGUAGE plpgsql AS $
+BEGIN
+  -- The function being wrapped is created later by the migration under test.
+  RETURN app_private.send_gift($1,$2,$3,$4);
+END;
+$;
 
 INSERT INTO auth.users (id) VALUES
   ('11111111-1111-4111-8111-111111111111'),
