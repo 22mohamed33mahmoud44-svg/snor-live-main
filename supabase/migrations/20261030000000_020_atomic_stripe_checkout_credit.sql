@@ -1,5 +1,15 @@
 -- Credit verified Stripe checkout events exactly once in a single transaction.
 -- Only the service role (used by the verified webhook) may call this RPC.
+
+-- A Stripe Checkout Session must be credited only once even if Stripe
+-- sends two distinct event IDs for the same event type and session.
+ALTER TABLE public.stripe_events
+  ADD COLUMN IF NOT EXISTS checkout_session_id text;
+
+CREATE UNIQUE INDEX IF NOT EXISTS stripe_events_checkout_session_once
+  ON public.stripe_events (checkout_session_id)
+  WHERE checkout_session_id IS NOT NULL;
+
 CREATE OR REPLACE FUNCTION public.credit_stripe_checkout_event(
   p_event_id text,
   p_event_type text,
@@ -27,8 +37,8 @@ BEGIN
     RAISE EXCEPTION 'Invalid Stripe event credit parameters';
   END IF;
 
-  INSERT INTO public.stripe_events (stripe_event_id, type)
-  VALUES (p_event_id, p_event_type)
+  INSERT INTO public.stripe_events (stripe_event_id, type, checkout_session_id)
+  VALUES (p_event_id, p_event_type, p_session_id)
   ON CONFLICT (stripe_event_id) DO NOTHING;
 
   IF NOT FOUND THEN
