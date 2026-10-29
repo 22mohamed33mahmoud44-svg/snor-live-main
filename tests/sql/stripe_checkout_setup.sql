@@ -1,4 +1,7 @@
 -- Run ONLY against a disposable PostgreSQL test database.
+CREATE ROLE anon NOLOGIN;
+CREATE ROLE authenticated NOLOGIN;
+CREATE ROLE service_role NOLOGIN;
 CREATE SCHEMA auth;
 CREATE TABLE auth.users (id uuid PRIMARY KEY);
 CREATE TABLE public.stripe_events (
