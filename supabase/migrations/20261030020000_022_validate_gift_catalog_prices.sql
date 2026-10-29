@@ -161,3 +161,90 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'coins_earned', v_earned, 'coins_spent', v_price);
 END;
 $$;
+
+-- Paid-show access must use catalog-priced single gifts for bundles.
+CREATE OR REPLACE FUNCTION public.request_show_access(p_show_id uuid, p_gift_type text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+    DECLARE
+      v_viewer_id    UUID := auth.uid();
+      v_show         paid_shows%ROWTYPE;
+      v_gift_id      UUID;
+      v_result       JSONB;
+      v_gift_cost    INTEGER;
+      v_purchase_count INTEGER;
+    BEGIN
+      IF v_viewer_id IS NULL THEN RAISE EXCEPTION 'Unauthorized'; END IF;
+
+      -- جلب بيانات البث الخاص
+      SELECT * INTO v_show FROM paid_shows WHERE id = p_show_id AND is_active = true;
+      IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'show_not_found_or_ended');
+      END IF;
+
+      -- لا يمكن للمذيع نفسه شراء access
+      IF v_viewer_id = v_show.streamer_id THEN
+        RETURN jsonb_build_object('success', false, 'error', 'streamer_has_access');
+      END IF;
+
+      -- التحقق أن نوع الهدية صحيح
+      IF p_gift_type <> v_show.required_gift_type THEN
+        RETURN jsonb_build_object('success', false, 'error', 'wrong_gift_type',
+          'required', v_show.required_gift_type);
+      END IF;
+
+      -- التحقق من عدم الحصول على access مسبقاً
+      IF EXISTS (SELECT 1 FROM show_access WHERE show_id = p_show_id AND user_id = v_viewer_id) THEN
+        RETURN jsonb_build_object('success', false, 'error', 'already_have_access');
+      END IF;
+
+      -- التحقق من حد المشاهدين
+      IF v_show.max_viewers IS NOT NULL THEN
+        IF (SELECT COUNT(*) FROM show_access WHERE show_id = p_show_id) >= v_show.max_viewers THEN
+          RETURN jsonb_build_object('success', false, 'error', 'show_full');
+        END IF;
+      END IF;
+
+      -- Resolve active catalog prices instead of hard-coded prices.
+      SELECT coin_cost INTO v_gift_cost
+      FROM public.gift_types
+      WHERE code = p_gift_type AND is_active = true;
+      IF v_gift_cost IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'gift_unavailable');
+      END IF;
+
+      IF v_show.required_gift_count > 100 THEN
+        RETURN jsonb_build_object('success', false, 'error', 'invalid_gift_count');
+      END IF;
+
+      -- Each gift uses the canonical single-item price. The whole function
+      -- executes in one transaction, including the eventual access grant.
+      FOR v_purchase_count IN 1..v_show.required_gift_count LOOP
+        v_result := public.send_gift(
+          v_viewer_id, v_show.streamer_id, p_gift_type, v_gift_cost
+        );
+        IF NOT coalesce((v_result->>'success')::boolean, false) THEN
+          RETURN v_result;
+        END IF;
+        v_gift_id := (v_result->>'gift_id')::uuid;
+      END LOOP;
+
+      -- منح access
+      INSERT INTO show_access (show_id, user_id, gift_id)
+      VALUES (p_show_id, v_viewer_id, v_gift_id);
+
+      -- إشعار المذيع
+      INSERT INTO notifications (user_id, type, title, data)
+      VALUES (v_show.streamer_id, 'gift', '🎭 مشاهد جديد دخل البث الخاص!',
+        jsonb_build_object('viewer_id', v_viewer_id, 'gift_type', p_gift_type, 'show_id', p_show_id));
+
+      RETURN jsonb_build_object(
+        'success', true, 'access_granted', true,
+        'show_id', p_show_id, 'gift_type', p_gift_type
+      );
+    END;
+    $function$
+
