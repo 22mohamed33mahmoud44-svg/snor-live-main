@@ -246,5 +246,4 @@ AS $function$
         'show_id', p_show_id, 'gift_type', p_gift_type
       );
     END;
-    $function$
-
+    $function$;
