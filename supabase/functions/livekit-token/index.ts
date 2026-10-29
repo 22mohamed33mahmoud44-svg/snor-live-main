@@ -89,7 +89,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const { data: profile } = await admin
-      .from('profiles')
+      .from('public_profiles')
       .select('username')
       .eq('id', user.id)
       .maybeSingle();

@@ -234,7 +234,7 @@ const ChatsTab = memo(({ userId, onOpenChat, onUnreadUpdate }: { userId: string,
 
     const partnerIds = convStats.map((c: { partner_id: string }) => c.partner_id);
     // H4: قراءة بيانات المستخدمين الآخرين تتم عبر view الأعمدة الآمنة فقط
-    const { data: profiles } = await supabase.from('profiles').select('id, username, full_name, avatar_url, gender').in('id', partnerIds);
+    const { data: profiles } = await supabase.from('public_profiles').select('id, username, full_name, avatar_url, gender').in('id', partnerIds);
 
     if (profiles) {
       const convList: ConvUser[] = profiles.map(p => {
