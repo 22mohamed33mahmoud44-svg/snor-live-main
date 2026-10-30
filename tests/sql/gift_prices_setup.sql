@@ -31,6 +31,10 @@ CREATE TABLE public.transactions (
   meta jsonb NOT NULL
 );
 
+-- Reproduce the actual pre-release production constraint that rejects 'buy'.
+ALTER TABLE public.transactions ADD CONSTRAINT transactions_type_check
+  CHECK (type IN ('spend', 'earn', 'bonus', 'refund'));
+
 CREATE TABLE public.gifts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   sender_id uuid NOT NULL,
