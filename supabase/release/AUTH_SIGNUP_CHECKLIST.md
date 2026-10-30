@@ -9,6 +9,14 @@ Run these **only against an isolated staging Supabase project** with synthetic t
 - Check that the `avatars` storage bucket is public-read and only allows authenticated owners to write to the first `<user_id>/` folder, with the documented image MIME types and 5 MiB limit.
 - Apply the reviewed owner-scoped profiles view policies on staging before testing. Do not point a staging frontend at production merely to simulate a signup.
 
+## Server-side adult-age validation (staging-only, not released)
+
+- The client enforces an exact 18th-birthday calendar cutoff, but callers can bypass the client.
+- The staged patch `supabase/security_patches/20261030_profile_adult_birthdate_guard.sql` installs a PostgreSQL trigger on the underlying `app_private.profiles` table to reject under-18 inserts and changes to `birthdate`. It is **not** in the automatic migrations directory and **not** applied to production.
+- CI uses the existing owner-view/RLS setup and a PostgreSQL 17 disposable database to prove that API-view changes cannot circumvent the trigger, eligible new accounts remain accepted, and unrelated edits to a synthetic legacy profile are not blocked.
+- Before release, reconcile the production-only migration history, review existing profile-age distribution **without exporting personal data**, and rehearse the forward-only SQL against a schema-compatible isolated staging clone. Test signup using staging Auth, not production.
+- User-entered birth dates are self-reported. A database trigger does not independently verify real-world age or replace any additional age-assurance requirements.
+
 ## Real-browser validation
 
 | Case | Expected behavior |
