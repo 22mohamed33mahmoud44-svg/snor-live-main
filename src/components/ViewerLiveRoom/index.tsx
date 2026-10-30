@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../../supabase';
 import { createCallMessageSender } from '../../utils/callMessageSender';
-import { mergeStreamChatHistory } from '../../utils/mergeStreamChatHistory';
+import { acknowledgeStreamChatMessage, mergeStreamChatHistory } from '../../utils/mergeStreamChatHistory';
 import { motion, AnimatePresence } from 'framer-motion';
 // تم إزالة الأيقونة 'X' غير المستخدمة لتنظيف الكود
 import { Heart, Users, Gift, Sparkles } from 'lucide-react';
@@ -74,12 +74,21 @@ export default function ViewerLiveRoom({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
-  const messageSender = useMemo(() => createCallMessageSender(async (message: string) => {
-    const { error } = await supabase.from('stream_chat').insert([{
+  const messageSender = useMemo(() => createCallMessageSender<ChatMessage>(async (message: string) => {
+    // Return the saved row as well as the write result so our optimistic
+    // bubble can acquire its permanent DB ID without waiting for Realtime.
+    const { data, error } = await supabase.from('stream_chat').insert([{
       stream_id: streamId, user_id: myUserId,
       username: myUsername || 'متابع', message,
-    }]);
-    return { error };
+    }])
+      .select('id, stream_id, user_id, username, message, created_at')
+      .single();
+
+    return {
+      data,
+      // Even a zero-row success cannot confirm the ID of a sent message.
+      error: error ?? (!data?.id ? new Error('Missing persisted stream_chat ID') : null),
+    };
   }), [streamId, myUserId, myUsername]);
   const [viewersCount, setViewersCount] = useState(1);
   const [likesCount, setLikesCount] = useState(0);
@@ -402,7 +411,12 @@ export default function ViewerLiveRoom({
 
     try {
       const result = await messageSender.send(text);
-      if (result.status === 'sent') {
+      if (result.status === 'sent' && result.data?.id) {
+        // Replace only this outgoing pending bubble with the saved server
+        // message ID. Future history refreshes now deduplicate it correctly.
+        setMessages(current => acknowledgeStreamChatMessage(
+          current, localId, result.data!, MESSAGES_LIMIT,
+        ));
         // Never wipe more recent text typed while the server was working.
         setNewMessage(current => current === draft ? '' : current);
       } else {
