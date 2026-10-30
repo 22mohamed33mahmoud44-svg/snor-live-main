@@ -1,8 +1,8 @@
 
 import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { supabase } from '../supabase';
-import { LiveKitRoom, useRoomContext } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
+import { Track, ConnectionState } from 'livekit-client';
 
 interface ActiveLiveRoomProps {
   streamId: string;
@@ -246,34 +246,54 @@ const MESSAGES_LIMIT = 30;
 // ── LiveKit Publisher (يقوم بنشر الكاميرا بأمان) ──
 const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
   const room = useRoomContext();
-  
+  const connectionState = useConnectionState();
+
   useEffect(() => {
-    if (!room || !stream) return;
+    // A LiveKitRoom can render before its websocket is connected. Publishing
+    // there fails and does not automatically retry without this state check.
+    if (!stream || connectionState !== ConnectionState.Connected) return;
+    let disposed = false;
+
     const publishTracks = async () => {
       try {
         for (const track of stream.getTracks()) {
+          if (disposed || track.readyState !== 'live') return;
+          const source = track.kind === 'video' ? Track.Source.Camera : Track.Source.Microphone;
+          // LiveKit may restore publications itself after reconnecting.
+          if (room.localParticipant.getTrackPublication(source)) continue;
           await room.localParticipant.publishTrack(track, {
-            simulcast: true,
-            source: track.kind === 'video' ? Track.Source.Camera : Track.Source.Microphone
+            simulcast: track.kind === 'video',
+            source,
           });
+          if (disposed) {
+            const pub = room.localParticipant.getTrackPublication(source);
+            if (pub?.track?.mediaStreamTrack === track) {
+              await room.localParticipant.unpublishTrack(pub.track, false);
+            }
+            return;
+          }
         }
-      } catch (e) {
-        console.error("خطأ في نشر البث لخوادم LiveKit:", e);
+      } catch (error) {
+        if (!disposed) console.error('تعذر نشر كاميرا أو ميكروفون البث:', error);
       }
     };
-    publishTracks();
-    
+
+    void publishTracks();
     return () => {
-      // إيقاف النشر عند الخروج لتنظيف الذاكرة
-      stream.getTracks().forEach(track => {
+      disposed = true;
+      for (const track of stream.getTracks()) {
         const source = track.kind === 'video' ? Track.Source.Camera : Track.Source.Microphone;
-        const publication = room.localParticipant.getTrackPublication(source);
-        if (publication && publication.track) {
-          room.localParticipant.unpublishTrack(publication.track);
+        const pub = room.localParticipant.getTrackPublication(source);
+        if (pub?.track?.mediaStreamTrack === track) {
+          // The studio owns this MediaStream. Do not stop its device tracks
+          // during a temporary reconnect or effect teardown.
+          void room.localParticipant.unpublishTrack(pub.track, false).catch(error => {
+            console.error('تعذر إلغاء نشر مسار البث:', error);
+          });
         }
-      });
+      }
     };
-  }, [room, stream]);
+  }, [room, stream, connectionState]);
 
   return null;
 });
