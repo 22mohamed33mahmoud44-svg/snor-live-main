@@ -50,6 +50,9 @@ jobs:
       - name: Prevent indefinite viewer stream connection loading
         run: node --test tests/unit/viewerStreamConnectionWiring.test.mjs
 
+      - name: Check broadcaster token and publishing recovery
+        run: node --test tests/unit/broadcasterConnectionRecovery.test.mjs
+
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
