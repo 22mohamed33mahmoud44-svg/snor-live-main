@@ -9,7 +9,7 @@ export type EditableProfile = {
   gender?: string;
   birthdate?: string;
   looking_for?: string;
-  avatar_url?: string;
+  avatar_url?: string | null;
   hide_online?: boolean;
   show_in_radar?: boolean;
 };
