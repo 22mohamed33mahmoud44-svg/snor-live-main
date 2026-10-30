@@ -274,6 +274,6 @@ jobs:
 
       - name: Typecheck LiveKit token and Stripe functions
         run: |
-          deno check --no-lock supabase/functions/livekit-token/index.ts
-          deno check --no-lock supabase/functions/stripe-webhook/index.ts
-          deno check --no-lock supabase/functions/create-checkout/index.ts
+          deno check --no-lock --node-modules-dir=auto supabase/functions/livekit-token/index.ts
+          deno check --no-lock --node-modules-dir=auto supabase/functions/stripe-webhook/index.ts
+          deno check --no-lock --node-modules-dir=auto supabase/functions/create-checkout/index.ts
