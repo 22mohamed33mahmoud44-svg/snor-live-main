@@ -115,6 +115,26 @@ A read-only production schema audit established a release-blocking mismatch:
 
 **Release order:** after migration reconciliation, back up/verify the ledger schema, rehearse the scoped constraint change on a schema-compatible staging clone, apply the Stripe SQL before deploying `stripe-webhook`, and confirm a Stripe test-mode checkout creates exactly one `buy` ledger row. Do not repair Stripe errors by writing coin balances directly or removing transaction constraints altogether.
 
+### Stripe webhook purchased-price verification
+
+PR #16 additionally makes the Stripe webhook retrieve the paid Checkout
+Session's line items from Stripe before crediting any wallet. It requires the
+configured Stripe Price ID for the claimed coin package, exactly one purchased
+item/quantity, a positive amount without an underpriced discount, and a
+matching authenticated buyer reference when present. The webhook returns a
+retryable 500 if Stripe lookup fails or a paid order cannot be verified; it
+does **not** mint coins from unverified metadata alone.
+
+**Before deployment**, ensure both Supabase Edge Functions use identical
+`STRIPE_PRICE_100_COINS`, `STRIPE_PRICE_500_COINS`, and
+`STRIPE_PRICE_1000_COINS` secrets for the matching Stripe account. Do not
+log or expose the secret values. Check for valid **in-flight paid sessions**
+created with an older Price ID before rotating prices or deploying the
+verification check. A previously valid checkout whose Price ID no longer
+matches the configured allowlist will be held for manual reconciliation
+rather than credited automatically. Test a webhook replay, an invalid
+price, a failed Stripe line-item lookup, and a real test-mode purchase.
+
 ### Safe promotion checklist
 
 1. Obtain an off-production database or an isolated schema-compatible clone and establish a reliable schema baseline; do not reset or run `db push` against the live database while histories differ.
