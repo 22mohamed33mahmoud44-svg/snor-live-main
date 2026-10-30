@@ -20,5 +20,4 @@ GRANT SELECT ON public.gift_types TO anon, authenticated;
 GRANT SELECT ON public.users_coins, public.transactions,
   public.gift_logs, public.gifts TO authenticated;
 GRANT USAGE ON SCHEMA app_private TO authenticated;
-GRANT EXECUTE ON FUNCTION app_private.send_gift_safe(uuid,uuid,text,integer)
-  TO authenticated;
+-- Do not GRANT send_gift_safe yet; _022 creates it later.
