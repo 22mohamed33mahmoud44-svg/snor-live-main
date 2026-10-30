@@ -82,4 +82,98 @@ BEGIN
 END;
 $$;
 
+-- Actual legacy public RPC must not be able to fabricate stream gifts.
+-- Grant only what the authenticated caller already has on production.
+GRANT USAGE ON SCHEMA app_private TO authenticated;
+GRANT EXECUTE ON FUNCTION app_private.send_gift_safe(uuid,uuid,text,integer) TO authenticated;
+
+DO $verify_grants$
+BEGIN
+  IF has_function_privilege('anon', 'public.send_stream_gift(uuid,uuid,text,integer)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'Anonymous clients can call the legacy wallet transfer RPC';
+  END IF;
+  IF NOT has_function_privilege('authenticated', 'public.send_stream_gift(uuid,uuid,text,integer)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'Authenticated users lost legacy stream gift RPC access';
+  END IF;
+END;
+$verify_grants$;
+
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
+
+DO $stream_wrapper$
+DECLARE
+  r jsonb;
+BEGIN
+  r := public.send_stream_gift(
+    '55555555-5555-4555-8555-555555555555',
+    '22222222-2222-4222-8222-222222222222', 'rose', 10
+  );
+  IF r->>'error' <> 'stream_not_live' THEN
+    RAISE EXCEPTION 'Legacy RPC accepted fabricated stream: %', r;
+  END IF;
+
+  r := public.send_stream_gift(
+    '33333333-3333-4333-8333-333333333333',
+    '66666666-6666-4666-8666-666666666666', 'rose', 10
+  );
+  IF r->>'error' <> 'receiver_not_stream_owner' THEN
+    RAISE EXCEPTION 'Legacy RPC allowed unrelated recipient: %', r;
+  END IF;
+
+  r := public.send_stream_gift(
+    '33333333-3333-4333-8333-333333333333',
+    '22222222-2222-4222-8222-222222222222', 'rose', 1
+  );
+  IF r->>'error' <> 'gift_price_changed' THEN
+    RAISE EXCEPTION 'Legacy RPC accepted underpriced stream gift: %', r;
+  END IF;
+
+  r := public.send_stream_gift(
+    '33333333-3333-4333-8333-333333333333',
+    '22222222-2222-4222-8222-222222222222', 'rose', 10
+  );
+  IF r->>'success' IS DISTINCT FROM 'true' THEN
+    RAISE EXCEPTION 'Authenticated legitimate legacy stream gift denied: %', r;
+  END IF;
+END;
+$stream_wrapper$;
+RESET ROLE;
+
+DO $gift_balances$
+DECLARE
+  buyer_balance integer;
+  owner_balance integer;
+BEGIN
+  SELECT coins INTO buyer_balance FROM public.users_coins
+    WHERE user_id='11111111-1111-4111-8111-111111111111';
+  SELECT coins INTO owner_balance FROM public.users_coins
+    WHERE user_id='22222222-2222-4222-8222-222222222222';
+  IF buyer_balance <> 10 OR owner_balance <> 35 THEN
+    RAISE EXCEPTION 'Legacy wrapper gift balance mismatch: buyer %, owner %',
+      buyer_balance, owner_balance;
+  END IF;
+  IF (SELECT count(*) FROM public.gift_logs) <> 2 THEN
+    RAISE EXCEPTION 'Legacy wrapper double-recorded stream gifts or logged rejected gifts';
+  END IF;
+END;
+$gift_balances$;
+
+SET ROLE anon;
+DO $anon_stream$
+BEGIN
+  BEGIN
+    PERFORM public.send_stream_gift(
+      '33333333-3333-4333-8333-333333333333',
+      '22222222-2222-4222-8222-222222222222', 'rose', 10
+    );
+    RAISE EXCEPTION 'Anonymous caller executed legacy stream gift RPC';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+END;
+$anon_stream$;
+RESET ROLE;
+
+SELECT 'legacy stream gift ownership, pricing and permissions tests passed' AS result;
+
 SELECT 'gift pricing and paid-show atomicity tests passed' AS result;
