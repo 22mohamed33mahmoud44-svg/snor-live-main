@@ -27,6 +27,22 @@ BEGIN
   SELECT coins INTO wallet FROM public.users_coins WHERE user_id = buyer;
   SELECT count(*) INTO event_count FROM public.stripe_events;
   SELECT count(*) INTO ledger_count FROM public.transactions;
+  -- The real production schema previously rejected type='buy'. Verify
+  -- the migrated type constraint allows the exact checkout ledger entry.
+  IF (SELECT count(*) FROM public.transactions
+      WHERE user_id=buyer AND type='buy' AND amount=100
+        AND meta->>'stripe_session_id'='cs_first') <> 1 THEN
+    RAISE EXCEPTION 'Checkout completed without a valid buy ledger transaction';
+  END IF;
+
+  BEGIN
+    INSERT INTO public.transactions(user_id,type,amount,meta)
+    VALUES (buyer,'arbitrary-credit',100,'{}'::jsonb);
+    RAISE EXCEPTION 'Unsupported wallet transaction type was accepted';
+  EXCEPTION WHEN check_violation THEN
+    NULL;
+  END;
+
   IF wallet <> 100 OR event_count <> 1 OR ledger_count <> 1 THEN
     RAISE EXCEPTION 'Unexpected event or wallet balance after retries: %,%,%', wallet, event_count, ledger_count;
   END IF;
