@@ -401,9 +401,18 @@ export default function ViewerLiveRoom({
           type: 'broadcast', event: 'gift', payload: { senderName: myUsername || 'متابع', emoji: gift.emoji, giftName: gift.name }
         });
       } else {
-        showToast('فشلت العملية، تحقق من الرصيد');
+        const reason = data?.error;
+        if (reason === 'gift_price_changed' || reason === 'gift_unavailable') {
+          showToast('تم تحديث أسعار الهدايا. افتح لوحة الهدايا مجدداً.');
+        } else if (reason === 'insufficient_coins') {
+          showToast('الرصيد غير كافٍ لإرسال هذه الهدية.');
+        } else {
+          console.error('Gift purchase failed', error ?? reason);
+          showToast('تعذر إرسال الهدية. حاول مرة أخرى.');
+        }
       }
     } catch (err) {
+      console.error('Gift purchase failed', err);
       showToast('حدث خطأ غير متوقع');
     }
   };
