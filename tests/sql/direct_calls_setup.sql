@@ -59,6 +59,51 @@ GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated;
 GRANT SELECT,INSERT ON public.matches TO authenticated;
 GRANT UPDATE(status) ON public.matches TO authenticated;
 
+-- Mirror the production signals table's active-match-only INSERT policy and
+-- cleanup trigger, which previously made post-end signals impossible to send.
+CREATE TABLE public.signals (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  match_id uuid NOT NULL REFERENCES public.matches(id),
+  sender uuid NOT NULL,
+  type text,
+  data jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.signals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY signals_insert_participant ON public.signals
+FOR INSERT TO authenticated
+WITH CHECK (
+  sender=auth.uid() AND EXISTS (
+    SELECT 1 FROM public.matches m
+    WHERE m.id=match_id AND m.status='active'
+      AND auth.uid() IN (m.user1,m.user2)
+  )
+);
+CREATE POLICY signals_select_participant ON public.signals
+FOR SELECT TO authenticated
+USING (EXISTS (
+  SELECT 1 FROM public.matches m WHERE m.id=match_id
+    AND auth.uid() IN (m.user1,m.user2)
+));
+GRANT SELECT,INSERT ON public.signals TO authenticated;
+
+CREATE FUNCTION app_private.cleanup_ended_match_signals()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path='pg_catalog'
+AS $cleanup$
+BEGIN
+  IF NEW.status='ended' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    DELETE FROM public.signals WHERE match_id=NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$cleanup$;
+
+CREATE TRIGGER cleanup_signals_on_match_end
+AFTER UPDATE OF status ON public.matches
+FOR EACH ROW WHEN (NEW.status='ended' AND OLD.status IS DISTINCT FROM NEW.status)
+EXECUTE FUNCTION app_private.cleanup_ended_match_signals();
+
+
 INSERT INTO auth.users(id) VALUES
  ('11111111-1111-4111-8111-111111111111'),
  ('22222222-2222-4222-8222-222222222222'),
