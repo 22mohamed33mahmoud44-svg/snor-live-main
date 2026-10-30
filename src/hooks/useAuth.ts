@@ -3,6 +3,7 @@ import { supabase } from '../supabase';
 import { saveOwnProfile } from '../utils/saveOwnProfile';
 import { requiresOnboarding } from '../utils/profileGate';
 import { isAdultBirthdate } from '../utils/ageEligibility';
+import { onboardingProfileChanges } from '../utils/profileDefaults';
 
 export interface OnboardingData {
   birthdate: string;
@@ -95,12 +96,7 @@ export function useAuth() {
     }
 
     try {
-      await saveOwnProfile(userId, {
-        gender: data.gender,
-        birthdate: data.birthdate,
-        looking_for: data.lookingFor,
-        avatar_url: avatarUrl,
-      });
+      await saveOwnProfile(userId, onboardingProfileChanges(data, avatarUrl));
 
       setProfileError(null);
       setShowOnboarding(false);
