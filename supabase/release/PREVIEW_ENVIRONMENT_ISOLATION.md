@@ -8,6 +8,13 @@ Consequently, the Vercel preview build should be **treated as connected to the p
 
 ## Enforced frontend safety gate on PR #16
 
+All unknown public hostnames are now treated as untrusted (not only
+`*.vercel.app`), so a custom Preview domain without the Vercel
+environment marker also displays the safety notice. Only the verified
+Production domain allowlist and explicit localhost/loopback hosts are
+trusted by default. Adding any new legitimate production domain requires
+reviewing this allowlist before release.
+
 The Vite app now checks the hosting environment **before importing** the
 application, Auth, or Supabase modules:
 

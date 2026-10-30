@@ -8,8 +8,9 @@ export type PreviewSafetyInput = {
   stripePublishableKey?: string;
 };
 
-// These are the project's verified production aliases. Any other .vercel.app
-// hostname is treated as Preview if Vercel did not expose VITE_VERCEL_ENV.
+// Verified Production aliases. All other public hostnames are treated as
+// Preview/unknown deployments: this also covers custom-domain previews when
+// Vercel's VITE_VERCEL_ENV is absent from the build.
 const productionHostnames = new Set([
   'snorlive.com',
   'www.snorlive.com',
@@ -21,8 +22,13 @@ const productionSupabaseHost = 'ogzrothtgxupawgjbioc.supabase.co';
 
 export function previewIsolationBlockReason(input: PreviewSafetyInput): string | null {
   const hostname = input.hostname.toLowerCase();
+  const localDevelopment = hostname === 'localhost'
+    || hostname.endsWith('.localhost')
+    || hostname === '127.0.0.1' || hostname === '[::1]';
+  // Fail closed on unrecognized public hostnames, even if a platform forgot
+  // to expose Vercel's environment marker or uses custom preview domains.
   const isVercelPreview = input.vercelEnvironment === 'preview'
-    || (hostname.endsWith('.vercel.app') && !productionHostnames.has(hostname));
+    || (!productionHostnames.has(hostname) && !localDevelopment);
   if (!isVercelPreview) return null;
 
   // Explicit approval is separate from Vercel's target and cannot be supplied

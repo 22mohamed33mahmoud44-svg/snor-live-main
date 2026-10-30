@@ -76,6 +76,23 @@ All 32 production-only migration statement bodies were recovered via **read-only
 
 **Do not move these files into `supabase/migrations` or apply them to Production.** The history is still divergent and requires staged reconciliation. Recovery removes the missing SQL source blocker, **not** the unsafe deployment/migration drift blocker.
 
+## Security hardening is now in the active migration chain (2026-10-30)
+
+The three security patches previously stored **only** under
+`supabase/security_patches` now also exist as ordered, executable forward
+migrations `_023`, `_024`, and `_025`. The PostgreSQL 17 CI jobs
+execute the **migration** versions directly, and
+`scripts/check-security-migration-parity.mjs` rejects differences from the
+review copies. This closes a source-to-deployment omission: passing a test
+that manually imports a security patch no longer falsely implies the patch
+will be included in a migrations-only rollout.
+
+**Do not run these migrations against production yet.** Its applied-version
+ledger remains divergent from the active repository chain. Stage and
+reconcile the full chain against a schema-compatible clone first. The
+migrations include strict preflight assumptions (e.g. 28 audited RPC grants)
+and should fail rather than proceed on an incompatible schema.
+
 ## Safe reconciliation procedure
 
 1. Treat Production schema and migration history as the operational source of truth.

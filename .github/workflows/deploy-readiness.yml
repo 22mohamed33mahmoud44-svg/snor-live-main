@@ -41,6 +41,9 @@ jobs:
       - name: Verify recovered production migration archive integrity
         run: node scripts/check-production-history.mjs
 
+      - name: Verify security patches are in executable migration chain
+        run: node scripts/check-security-migration-parity.mjs
+
       - name: Guard against unexpected migration history drift
         run: node scripts/report-migration-drift.mjs --report
 
@@ -196,7 +199,7 @@ jobs:
         run: |
           set -euo pipefail
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_privacy_setup.sql
-          psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_profile_privacy.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030030000_023_owner_profile_privacy.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_privacy_assertions.sql
 
   anon-rpc-security-tests:
@@ -233,7 +236,7 @@ jobs:
         run: |
           set -euo pipefail
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/anon_rpc_setup.sql
-          psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_anon_rpc_execute.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030040000_024_restrict_anonymous_rpc_execute.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/anon_rpc_assertions.sql
 
   leaderboard-database-tests:
@@ -270,7 +273,7 @@ jobs:
         run: |
           set -euo pipefail
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/leaderboard_mviews_setup.sql
-          psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_private_leaderboard_materialized_views.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030050000_025_protect_leaderboard_materialized_views.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/leaderboard_mviews_assertions.sql
   edge-functions-typecheck:
     name: Typecheck Supabase Edge Functions with Deno 2

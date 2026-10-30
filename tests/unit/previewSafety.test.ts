@@ -63,3 +63,12 @@ Deno.test('custom-domain preview still blocked by declared Vercel preview enviro
   assertBlocked({ ...preview, hostname:'review.example.com' },
     'Custom preview hostname should not bypass VERCEL_ENV');
 });
+
+Deno.test('unknown public custom domains block instead of bypassing Preview safety', () => {
+  for (const hostname of ['review.snorlive.com', 'qa.example.org', 'another-example.net']) {
+    assertBlocked({ ...preview, hostname, vercelEnvironment: undefined },
+      'Unrecognized public hostname must not trust production connectivity');
+    assertBlocked({ ...preview, hostname, vercelEnvironment: 'production' },
+      'A production marker alone must not grant unknown domains trusted status');
+  }
+});
