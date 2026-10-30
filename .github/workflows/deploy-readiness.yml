@@ -56,6 +56,9 @@ jobs:
       - name: Check broadcaster token and publishing recovery
         run: node --test tests/unit/broadcasterConnectionRecovery.test.mjs
 
+      - name: Ensure broadcaster media capture stops on unmount and handles permission failures
+        run: node --test tests/unit/broadcasterCameraLifecycleWiring.test.mjs
+
       - name: Prevent duplicate livestream creation and camera leaks in studio
         run: node --test tests/unit/liveStreamLaunchWiring.test.mjs
 
@@ -567,6 +570,9 @@ jobs:
 
       - name: Merge history with new and pending live stream chat safely
         run: deno test tests/unit/mergeStreamChatHistory.test.ts
+
+      - name: Stop camera and mic tracks from late browser permission grants
+        run: deno test tests/unit/cancelableMediaCapture.test.ts
 
       - name: Check signed LiveKit token media permissions
         run: deno test --allow-env --no-lock --node-modules-dir=auto supabase/functions/livekit-token/token-grants.test.mjs
