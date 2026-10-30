@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { supabase } from '../../supabase'; // تأكد من صحة مسار ملف سيرفر Supabase الخاص بك
+import { supabase } from '../../supabase';
+import { createCallMessageSender } from '../../utils/callMessageSender';
 import { motion, AnimatePresence } from 'framer-motion';
 // تم إزالة الأيقونة 'X' غير المستخدمة لتنظيف الكود
 import { Heart, Users, Gift, Sparkles } from 'lucide-react';
@@ -68,6 +69,13 @@ export default function ViewerLiveRoom({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const messageSender = useMemo(() => createCallMessageSender(async (message: string) => {
+    const { error } = await supabase.from('stream_chat').insert([{
+      stream_id: streamId, user_id: myUserId,
+      username: myUsername || 'متابع', message,
+    }]);
+    return { error };
+  }), [streamId, myUserId, myUsername]);
   const [viewersCount, setViewersCount] = useState(1);
   const [likesCount, setLikesCount] = useState(0);
   const [floatingHearts, setFloatingHearts] = useState<FloatingHeart[]>([]);
@@ -219,7 +227,9 @@ export default function ViewerLiveRoom({
         if (!isMounted) return;
         const newMsg = payload.new as RealtimeChatMessage;
         if (newMsg.user_id === currentMyUserId) return;
-        setMessages(prev => [...prev.slice(-(MESSAGES_LIMIT - 1)), newMsg]);
+        setMessages(prev => prev.some(m => m.id === newMsg.id)
+          ? prev
+          : [...prev.slice(-(MESSAGES_LIMIT - 1)), newMsg]);
       })
       // استقبال دفعة الإعجابات (Batching) لحماية الواجهة من الانهيار
       .on('broadcast', { event: 'like_batch' }, ({ payload }) => {
@@ -321,26 +331,28 @@ export default function ViewerLiveRoom({
 
   const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const text = newMessage.trim();
-    if (!text || sending) return;
+    const draft = newMessage;
+    const text = draft.trim();
+    if (!text || messageSender.isSending()) return;
 
     setSending(true);
-    setNewMessage('');
-    const localId = Date.now().toString();
-
+    const localId = `pending-${Date.now()}-${Math.random()}`;
     setMessages(prev => [...prev.slice(-(MESSAGES_LIMIT - 1)), {
-      id: localId, stream_id: streamId, user_id: myUserId, username: 'أنت', message: text
+      id: localId, stream_id: streamId, user_id: myUserId, username: 'أنت', message: text,
     }]);
 
-    const { error } = await supabase
-      .from('stream_chat')
-      .insert([{ stream_id: streamId, user_id: myUserId, username: myUsername || 'متابع', message: text }]);
-
-    setSending(false);
-    if (error) {
-      showToast('فشل إرسال الرسالة');
-      setMessages(prev => prev.filter(m => m.id !== localId));
-      setNewMessage(text);
+    try {
+      const result = await messageSender.send(text);
+      if (result.status === 'sent') {
+        // Never wipe more recent text typed while the server was working.
+        setNewMessage(current => current === draft ? '' : current);
+      } else {
+        setMessages(prev => prev.filter(message => message.id !== localId));
+        // The input was never cleared, so an unsuccessful message remains.
+        showToast('تعذر إرسال الرسالة. النص محفوظ لإعادة المحاولة.');
+      }
+    } finally {
+      setSending(false);
     }
   };
 
