@@ -158,6 +158,29 @@ matches the configured allowlist will be held for manual reconciliation
 rather than credited automatically. Test a webhook replay, an invalid
 price, a failed Stripe line-item lookup, and a real test-mode purchase.
 
+### Financial table hardening (forward migration _026)
+
+Production was checked **read-only** on 2026-10-30. The six critical
+`public` tables `gift_logs`, `gifts`, `transactions`,
+`users_coins`, `stripe_events`, and `gift_types` already block
+`INSERT/UPDATE/DELETE` by `anon` and `authenticated`, while
+`service_role` retains `INSERT`. No direct-write compromise was found.
+
+However, `gift_logs` has a legacy authenticated `INSERT` RLS policy
+`"gift_logs insert own"`. If direct `INSERT` were accidentally granted
+later, authenticated clients could forge log rows with their own sender ID
+without spending coins. Migration `20261030060000_026_lock_financial_table_writes.sql`
+removes that policy and explicitly REVOKEs browser write privileges on
+the six financial tables. It preserves SELECT and trusted service writes.
+
+A dedicated PostgreSQL 17 test reproduces the permissive legacy grants
+and policy, runs the migration, **re-grants `INSERT` deliberately** to
+prove RLS still blocks forged logs, and confirms a real authenticated
+stream-gift RPC still debits/credits and logs its validated gift.
+
+As with all forward migrations in PR #16, **do not execute on Production**
+until migration-history reconciliation and staging acceptance are complete.
+
 ### Safe promotion checklist
 
 1. Obtain an off-production database or an isolated schema-compatible clone and establish a reliable schema baseline; do not reset or run `db push` against the live database while histories differ.

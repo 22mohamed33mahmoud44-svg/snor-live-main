@@ -18,6 +18,7 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
 
 -- An authenticated user must not be able to forge gift logs even if
 -- someone accidentally GRANTs INSERT again in the future.
+ALTER TABLE public.gift_logs ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "gift_logs insert own" ON public.gift_logs;
 
 DO $verify_financial_writes$

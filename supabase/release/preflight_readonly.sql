@@ -33,6 +33,20 @@ WITH baseline(requirement, is_ready, reason) AS (
       AND NOT has_function_privilege('authenticated','public.add_coins(uuid,integer,jsonb)','EXECUTE')
       AND has_function_privilege('service_role','public.add_coins(uuid,integer,jsonb)','EXECUTE'),
       'Never allow a browser JWT to add coins; Stripe webhook is the only crediting route'),
+    ('Financial ledger browser writes forbidden',
+      NOT EXISTS (
+        SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname IN
+          ('gift_logs','gifts','transactions','users_coins','stripe_events','gift_types')
+          AND (
+            has_table_privilege('anon',c.oid,'INSERT') OR has_table_privilege('anon',c.oid,'UPDATE')
+            OR has_table_privilege('anon',c.oid,'DELETE')
+            OR has_table_privilege('authenticated',c.oid,'INSERT')
+            OR has_table_privilege('authenticated',c.oid,'UPDATE')
+            OR has_table_privilege('authenticated',c.oid,'DELETE')
+          )
+      ),
+      'Signed-in clients must not mint balances or forge transactions/gift records'),
     ('stripe_events table', to_regclass('public.stripe_events') IS NOT NULL,
       'Stripe idempotency migration extends the existing event table'),
     ('gift_types table', to_regclass('public.gift_types') IS NOT NULL,
@@ -82,6 +96,14 @@ planned(requirement, is_applied, reason) AS (
              WHERE table_schema='public' AND table_name='matches'
                    AND column_name='call_type'),
       'Direct-call migration must persist the call type'),
+    ('Gift logs reject browser-created rows',
+      NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public' AND tablename='gift_logs'
+          AND cmd IN ('INSERT','ALL')
+          AND ('authenticated' = ANY(roles) OR 'public' = ANY(roles))
+      ),
+      'Migration _026 removes the old own-sender gift_logs INSERT policy'),
     ('Three private materialized leaderboards',
       NOT EXISTS (
         SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace

@@ -9,7 +9,7 @@ The baseline records migration versions, names, hashes and character counts from
 | Matching migration versions (NOT necessarily identical SQL) | 4 |
 | Production-only SQL recovered in archival folder | 32 |
 | Repo-only versions timestamped **before or at** production latest | 15 |
-| Repo-only versions timestamped **after** production latest | 7 |
+| Repo-only versions timestamped **after** production latest | 8 |
 
 Latest production migration: `20260908221940`.
 
@@ -38,6 +38,7 @@ Latest production migration: `20260908221940`.
 - `20261030030000_023_owner_profile_privacy.sql`
 - `20261030040000_024_restrict_anonymous_rpc_execute.sql`
 - `20261030050000_025_protect_leaderboard_materialized_views.sql`
+- `20261030060000_026_lock_financial_table_writes.sql`
 
 ## Same-version SQL body comparison
 - `20260723064545`: not byte-identical; production stores 55 statements, repository a single SQL source.
