@@ -1,0 +1,1 @@
+create index if not exists stream_like_rate_stream_id_idx on app_private.stream_like_rate(stream_id);
