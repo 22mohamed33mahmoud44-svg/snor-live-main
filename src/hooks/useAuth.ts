@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../supabase';
 import { saveOwnProfile } from '../utils/saveOwnProfile';
+import { requiresOnboarding } from '../utils/profileGate';
 
 export interface OnboardingData {
   birthdate: string;
@@ -43,7 +44,7 @@ export function useAuth() {
         return;
       }
 
-      if (!data) setShowOnboarding(true);
+      if (requiresOnboarding(data)) setShowOnboarding(true);
     } catch (error) {
       if (requestId !== profileCheckRequestRef.current) return;
       console.error('Profile check failed:', error);
