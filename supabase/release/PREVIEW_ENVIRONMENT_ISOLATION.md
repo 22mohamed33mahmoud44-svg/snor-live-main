@@ -6,6 +6,32 @@ The Vercel project `snor-live-main` (`prj_fJTGJAprMU8NpbOItkCSkQB4HHba`) has **o
 
 Consequently, the Vercel preview build should be **treated as connected to the production Supabase and Stripe configuration until independently verified otherwise**. Vercel Preview is a frontend deployment target, NOT an isolated Supabase staging project or safe test environment. These shared client-side environment variables can direct data-changing browser requests to real infrastructure.
 
+## Enforced frontend safety gate on PR #16
+
+The Vite app now checks the hosting environment **before importing** the
+application, Auth, or Supabase modules:
+
+- A `preview` deployment (or an unrecognized Vercel `*.vercel.app` hostname)
+  displays a non-interactive warning until isolation is explicitly established.
+- `VITE_STAGING_ISOLATED=true` is a **Preview-only, branch-scoped attestation**.
+  Do not configure this flag for Production, or reuse the existing shared env
+  record. Merely setting the flag is insufficient.
+- The Preview `VITE_SUPABASE_URL` must be HTTPS, use a distinct
+  `*.supabase.co` hostname, and **must not** point to the known Production
+  host. `VITE_STRIPE_PUBLIC_KEY` must start with `pk_test_`.
+- Production's official domains and localhost are unaffected by this gate.
+  The guard cannot protect direct API calls and is **not** a replacement for
+  Supabase RLS, Stripe server-side validation, or tested staging isolation.
+
+The current Preview **will deliberately show the safety notice** until the
+staging service and branch-scoped environment records have been provisioned.
+This is expected behavior and prevents casual test users from creating
+Production accounts or payments through the Preview frontend.
+
+Do not bypass the gate to force a green smoke test. Verify actual network
+destinations, Edge Function secrets, and Stripe webhook mode before enabling
+the flag.
+
 ## Do not run these tests from the current shared Preview
 
 - Do **not** create real or synthetic accounts, upload avatars, or change profiles while calling this a staging test.
