@@ -70,13 +70,23 @@ BEGIN
     RAISE EXCEPTION 'New profile unexpectedly exists';
   END IF;
 
-  INSERT INTO public.profiles (id, username, gender, birthdate)
-  VALUES (my_id, 'new_user', 'female', DATE '2000-01-02');
+  -- Production avatar_url is NOT NULL even though the onboarding
+  -- photograph is optional. The frontend must send the empty string.
+  BEGIN
+    INSERT INTO public.profiles (id, username, gender, birthdate)
+    VALUES (my_id, 'new_user', 'female', DATE '2000-01-02');
+    RAISE EXCEPTION 'Incomplete profile without avatar_url passed NOT NULL constraint';
+  EXCEPTION WHEN not_null_violation THEN NULL;
+  END;
+
+  INSERT INTO public.profiles (id, username, gender, birthdate, avatar_url)
+  VALUES (my_id, 'user_44444444444444448444444444444444', 'female', DATE '2000-01-02', '');
 
   UPDATE public.profiles SET full_name='New User' WHERE id=my_id;
   IF NOT EXISTS (
     SELECT 1 FROM public.profiles
-    WHERE id=my_id AND username='new_user' AND full_name='New User'
+    WHERE id=my_id AND username='user_44444444444444448444444444444444'
+      AND full_name='New User' AND avatar_url=''
   ) THEN
     RAISE EXCEPTION 'New owner INSERT/UPDATE flow failed';
   END IF;
