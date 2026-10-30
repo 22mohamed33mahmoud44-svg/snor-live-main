@@ -87,8 +87,7 @@ test('will not quote invented, free, missing or untrusted checkout prices', () =
   for (const changed of [
     { amount_total: null }, { amount_total: undefined }, { amount_total: '4500' },
     { amount_total: -10 }, { amount_total: 0 }, { amount_total: 1.5 },
-    { currency: null }, { currency: 'EGP
-' }, { currency: 'invalid' },
+    { currency: null }, { currency: 'EGP\n' }, { currency: 'invalid' },
     { url: 'http://checkout.stripe.com/pay/test' },
     { url: 'javascript:alert(1)' }, { url: 'https://admin:password@checkout.stripe.com' },
   ]) {
