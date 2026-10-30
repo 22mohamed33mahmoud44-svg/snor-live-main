@@ -290,6 +290,9 @@ jobs:
           deno check --no-lock --node-modules-dir=auto supabase/functions/stripe-webhook/index.ts
           deno check --no-lock --node-modules-dir=auto supabase/functions/create-checkout/index.ts
 
+      - name: Test signup confirmation and authenticated session routing
+        run: deno test tests/unit/emailAuthOutcome.test.ts
+
       - name: Test new-account profile field requirements
         run: deno test tests/unit/profileDefaults.test.ts
 
