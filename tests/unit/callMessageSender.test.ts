@@ -46,3 +46,22 @@ Deno.test('second click while the first insert is in flight must not resend', as
   assert(!sender.isSending(), 'sender did not unlock after success');
   assert((await sender.send('next')).status === 'sent' && writes === 2, 'sender did not recover');
 });
+
+
+Deno.test('successful insert returns persisted row for an optimistic chat ID swap', async () => {
+  const confirmed = {
+    id: 'persisted-uuid-123',
+    stream_id: 'stream-123',
+    user_id: 'viewer-7',
+    username: 'مشاهد',
+    message: 'أهلاً',
+    created_at: '2026-10-30T21:00:00Z',
+  };
+  const sender = createCallMessageSender<typeof confirmed>(async text => ({
+    error: null, data: { ...confirmed, message: text },
+  }));
+  const result = await sender.send('  أهلاً  ');
+  assert(result.status === 'sent' && result.data?.id === confirmed.id,
+    'sender dropped database confirmation ID');
+  assert(result.data?.message === 'أهلاً', 'sender did not preserve normalized stored message');
+});
