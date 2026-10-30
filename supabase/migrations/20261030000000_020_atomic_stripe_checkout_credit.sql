@@ -1,6 +1,36 @@
 -- Credit verified Stripe checkout events exactly once in a single transaction.
 -- Only the service role (used by the verified webhook) may call this RPC.
 
+-- PRODUCTION COMPATIBILITY: public.add_coins() logs the transaction type 'buy',
+-- but the deployed transactions_type_check currently permits only
+-- spend/earn/bonus/refund. That makes every valid checkout roll back.
+-- Change only this known constraint, and fail closed on unexpected schema drift.
+DO $allow_checkout_buy$
+DECLARE
+  v_check text;
+BEGIN
+  SELECT pg_get_constraintdef(oid) INTO v_check
+  FROM pg_constraint
+  WHERE conrelid = 'public.transactions'::regclass
+    AND conname = 'transactions_type_check' AND contype = 'c';
+
+  IF v_check IS NULL THEN
+    RAISE EXCEPTION 'Missing transactions_type_check: reconcile schema before Stripe release';
+  END IF;
+  IF v_check = 'CHECK ((type = ANY (ARRAY[''spend''::text, ''earn''::text, ''bonus''::text, ''refund''::text, ''buy''::text])))' THEN
+    -- Already upgraded by a reviewed forward migration.
+    NULL;
+  ELSIF v_check = 'CHECK ((type = ANY (ARRAY[''spend''::text, ''earn''::text, ''bonus''::text, ''refund''::text])))' THEN
+    ALTER TABLE public.transactions DROP CONSTRAINT transactions_type_check;
+    ALTER TABLE public.transactions
+      ADD CONSTRAINT transactions_type_check
+      CHECK (type IN ('spend', 'earn', 'bonus', 'refund', 'buy'));
+  ELSE
+    RAISE EXCEPTION 'Unexpected transaction type policy: %', v_check;
+  END IF;
+END;
+$allow_checkout_buy$;
+
 -- A Stripe Checkout Session must be credited only once even if Stripe
 -- sends two distinct event IDs for the same event type and session.
 ALTER TABLE public.stripe_events
