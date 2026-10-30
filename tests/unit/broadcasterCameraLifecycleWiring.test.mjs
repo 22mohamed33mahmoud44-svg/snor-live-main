@@ -30,8 +30,8 @@ test('successful camera permission marks it ready; denied capture presents an er
 });
 
 test('device error can retry getUserMedia, not only fetch a new LiveKit token', () => {
-  assert.match(source, /const \[captureError, setCaptureError\] = useState<string \| null>\(null\)/);
-  assert.match(source, /const \[cameraAttempt, setCameraAttempt\] = useState\(0\)/);
+  assert.match(source, /const \[captureError, setCaptureError\]\s*=\s*useState<string \| null>\(null\)/);
+  assert.match(source, /const \[cameraAttempt, setCameraAttempt\]\s*=\s*useState\(0\)/);
   assert.match(source, /if \(!initialStream && !cameraReady\) setCameraAttempt\(attempt => attempt \+ 1\)/);
   assert.match(source, /const broadcastProblem = captureError \|\| liveKitError/);
   assert.match(source, /role=\{broadcastProblem \? 'alert' : 'status'\}/);
