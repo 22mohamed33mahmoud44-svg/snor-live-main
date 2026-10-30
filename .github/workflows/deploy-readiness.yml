@@ -38,6 +38,9 @@ jobs:
       - name: Ensure call mute and camera controls update LiveKit tracks
         run: node --test tests/unit/livekitMediaControls.test.mjs
 
+      - name: Check viewer-only subscription and broadcaster media publishing
+        run: node --test tests/unit/liveStreamMediaWiring.test.mjs
+
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
