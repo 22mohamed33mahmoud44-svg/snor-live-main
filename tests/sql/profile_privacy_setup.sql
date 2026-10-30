@@ -11,10 +11,10 @@ GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated, anon;
 
 CREATE TABLE app_private.profiles (
   id uuid PRIMARY KEY,
-  username text,
-  gender text,
-  birthdate date,
-  avatar_url text,
+  username text NOT NULL CHECK (char_length(btrim(username)) BETWEEN 1 AND 50),
+  gender text NOT NULL,
+  birthdate date NOT NULL,
+  avatar_url text NOT NULL CHECK (char_length(avatar_url) <= 2048),
   hide_online boolean,
   show_in_radar boolean,
   full_name text,
@@ -56,7 +56,7 @@ CREATE FUNCTION public.update_profiles_search_vector()
 RETURNS trigger LANGUAGE plpgsql
 AS $$ BEGIN RETURN NEW; END; $$;
 
-INSERT INTO app_private.profiles(id,username,full_name,gender,birthdate,coins_earned,referral_code)
+INSERT INTO app_private.profiles(id,username,full_name,gender,birthdate,avatar_url,coins_earned,referral_code)
 VALUES
- ('11111111-1111-4111-8111-111111111111','alice','Alice','female','2001-01-01',2000,'ALICECODE'),
- ('22222222-2222-4222-8222-222222222222','bob','Bob','male','1999-01-01',9000,'BOBCODE');
+ ('11111111-1111-4111-8111-111111111111','alice','Alice','female','2001-01-01','',2000,'ALICECODE'),
+ ('22222222-2222-4222-8222-222222222222','bob','Bob','male','1999-01-01','',9000,'BOBCODE');
