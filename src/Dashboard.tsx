@@ -1,6 +1,7 @@
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { supabase } from './supabase';
+import { endMatchOnServer } from './utils/endMatchOnServer';
 import { createPortal } from 'react-dom';
 
 // ── Components ──────────────────────────────────────────────────
@@ -36,6 +37,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   const [incomingCall, setIncomingCall] = useState<{ id: string; callerId: string; type: 'video' | 'audio' } | null>(null);
   const [outgoingCall, setOutgoingCall] = useState<{ id: string; remoteId: string; type: 'video' | 'audio'; startedAt: number } | null>(null);
   const [callError, setCallError] = useState<string | null>(null);
+  const [recoverableCall, setRecoverableCall] = useState<{ id: string; remoteId: string; type: 'audio' | 'video' } | null>(null);
   const [showRandomMatch, setShowRandomMatch] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
@@ -60,10 +62,34 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     setOutgoingCall({ id: String(matchId), remoteId, type, startedAt: Date.now() });
   }, []);
 
+  // A refresh or crashed tab must not strand an accepted direct match as busy.
+  // Offer recovery rather than silently ending another device's active call.
+  useEffect(() => {
+    let cancelled = false;
+    const findInterrupted = async () => {
+      const { data, error } = await supabase.from('matches')
+        .select('id, user1, user2, call_type')
+        .eq('kind', 'direct')
+        .eq('status', 'active')
+        .or(`user1.eq.${userId},user2.eq.${userId}`)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cancelled || error || !data) return;
+      setRecoverableCall({
+        id: data.id,
+        remoteId: data.user1 === userId ? data.user2 : data.user1,
+        type: data.call_type === 'audio' ? 'audio' : 'video',
+      });
+    };
+    void findInterrupted();
+    return () => { cancelled = true; };
+  }, [userId]);
+
   // Incoming invitations: filtered realtime plus polling if the websocket is unavailable.
   useEffect(() => {
     let cancelled = false;
-    if (activeCall || outgoingCall) return;
+    if (activeCall || outgoingCall || recoverableCall) return;
 
     const checkIncoming = async () => {
       const cutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
@@ -94,7 +120,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       clearInterval(interval);
       void supabase.removeChannel(channel);
     };
-  }, [userId, activeCall, outgoingCall]);
+  }, [userId, activeCall, outgoingCall, recoverableCall]);
 
   // Do not request a LiveKit token until the recipient has explicitly accepted.
   useEffect(() => {
@@ -165,7 +191,26 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     if (error) console.error('Could not cancel direct call', error);
   };
 
-  const callOverlay = (incomingCall || outgoingCall || callError) && typeof document !== 'undefined'
+  const resumeInterruptedCall = () => {
+    if (!recoverableCall) return;
+    setIncomingCall(null);
+    setOutgoingCall(null);
+    setOpenChat(null);
+    setActiveCall({ matchId: recoverableCall.id, remoteUserId: recoverableCall.remoteId, type: recoverableCall.type });
+    setRecoverableCall(null);
+  };
+
+  const endInterruptedCall = async () => {
+    if (!recoverableCall) return;
+    if (await endMatchOnServer(recoverableCall.id)) {
+      setRecoverableCall(null);
+      setCallError(null);
+    } else {
+      setCallError('تعذر إنهاء المكالمة القديمة. راجع الاتصال بالإنترنت وحاول مرة أخرى.');
+    }
+  };
+
+  const callOverlay = (incomingCall || outgoingCall || recoverableCall || callError) && typeof document !== 'undefined'
     ? createPortal(
       <div dir="rtl" style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,.75)', display: 'grid', placeItems: 'center', padding: 20 }}>
         <div role="dialog" aria-modal="true" aria-label="المكالمات" style={{ width: 'min(420px,100%)', padding: 26, borderRadius: 22, background: '#17152b', color: 'white', textAlign: 'center', boxShadow: '0 15px 70px #0008' }}>
@@ -183,6 +228,16 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
               <h3>بانتظار رد الطرف الآخر</h3>
               <p>سيبدأ الاتصال بعد قبول الدعوة.</p>
               <button type="button" onClick={() => { void cancelOutgoingCall(); }}>إلغاء الاتصال</button>
+            </>
+          ) : recoverableCall ? (
+            <>
+              <h3>مكالمة سابقة ما زالت نشطة</h3>
+              <p>تم العثور على مكالمة مباشرة لم تنتهِ بعد. يمكنك العودة إليها أو إنهاؤها.</p>
+              {callError && <p role="alert">{callError}</p>}
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 12 }}>
+                <button type="button" onClick={resumeInterruptedCall}>العودة للمكالمة</button>
+                <button type="button" onClick={() => { void endInterruptedCall(); }}>إنهاء المكالمة</button>
+              </div>
             </>
           ) : (
             <>
