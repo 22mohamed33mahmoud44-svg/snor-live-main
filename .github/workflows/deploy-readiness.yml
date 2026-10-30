@@ -79,6 +79,58 @@ jobs:
 
       - name: Build app
         run: npm run build
+  single-active-stream-database-tests:
+    name: Prevent simultaneous streams on disposable PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Test active-stream uniqueness, history and duplicate preflight
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/single_live_stream_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_one_active_stream_per_owner.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/single_live_stream_assertions.sql
+
+          # The same patch must fail cleanly rather than silently ending
+          # already-active streams if pre-existing duplicates are present.
+          createdb snor_preflight
+          PGDATABASE=snor_preflight psql -X -v ON_ERROR_STOP=1 -f tests/sql/single_live_stream_duplicates_setup.sql
+          if PGDATABASE=snor_preflight psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_one_active_stream_per_owner.sql > /tmp/single-live-preflight.log 2>&1; then
+            echo 'ERROR: duplicate-active preflight unexpectedly succeeded'
+            exit 1
+          fi
+          if ! grep -q 'Existing duplicate active streams' /tmp/single-live-preflight.log; then
+            cat /tmp/single-live-preflight.log
+            echo 'ERROR: preflight failed for an unexpected reason'
+            exit 1
+          fi
+          PGDATABASE=snor_preflight psql -X -v ON_ERROR_STOP=1 -f tests/sql/single_live_stream_preflight_assertions.sql
+
   direct-call-database-tests:
     name: Test direct-call consent and RLS on disposable PostgreSQL
     runs-on: ubuntu-latest
