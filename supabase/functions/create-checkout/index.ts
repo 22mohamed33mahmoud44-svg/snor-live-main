@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@12.0.0?target=deno";
-import { buildCheckoutRedirects, parseCheckoutPackage, resolveCheckoutPrice } from "./checkout-validation.mjs";
+import { buildCheckoutRedirects, checkoutDisplayDetails, parseCheckoutPackage, resolveCheckoutPrice } from "./checkout-validation.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -94,8 +94,17 @@ Deno.serve(async (req) => {
       cancel_url: cancelUrl,
     });
 
+    const checkout = checkoutDisplayDetails(session);
+    if (!checkout) {
+      console.error("Stripe did not return valid checkout pricing data");
+      return new Response(JSON.stringify({ error: "Unable to confirm package price" }), {
+        status: 503,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     return new Response(
-      JSON.stringify({ session_id: session.id, checkout_url: session.url }),
+      JSON.stringify(checkout),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (error) {
