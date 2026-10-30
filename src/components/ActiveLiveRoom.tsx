@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from '
 import { supabase } from '../supabase';
 import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
 import { createCallMessageSender } from '../utils/callMessageSender';
+import { createCancelableMediaCapture } from '../utils/cancelableMediaCapture';
 import { mergeStreamChatHistory } from '../utils/mergeStreamChatHistory';
 import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
@@ -478,6 +479,8 @@ export default function ActiveLiveRoom({
   const [endingStream, setEndingStream]     = useState(false);
   const [endError, setEndError]             = useState<string | null>(null);
   const [cameraReady, setCameraReady]       = useState(false);
+  const [captureError, setCaptureError]     = useState<string | null>(null);
+  const [cameraAttempt, setCameraAttempt]   = useState(0);
   const [liveKitToken, setLiveKitToken]     = useState<string | null>(null);
   const [liveKitError, setLiveKitError]     = useState<string | null>(null);
   const [mediaPublished, setMediaPublished] = useState(false);
@@ -564,9 +567,13 @@ export default function ActiveLiveRoom({
     ignoreDisconnectRef.current = true;
     setMediaPublished(false);
     setLiveKitError(null);
+    setCaptureError(null);
     setLiveKitToken(null);
+    // Refresh device permissions as well as the LiveKit connection when
+    // the camera itself failed. A token-only retry could never fix it.
+    if (!initialStream && !cameraReady) setCameraAttempt(attempt => attempt + 1);
     setConnectionAttempt(attempt => attempt + 1);
-  }, []);
+  }, [initialStream, cameraReady]);
 
   // ── Heartbeat ──
   const sendHeartbeat = useCallback(async () => {
@@ -617,29 +624,51 @@ export default function ActiveLiveRoom({
 
   // ── الكاميرا ──
   useEffect(() => {
+    setCameraReady(false);
+    setCaptureError(null);
+
     if (initialStream) {
       streamRef.current = initialStream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = initialStream;
-        setCameraReady(true);
+      if (videoRef.current) videoRef.current.srcObject = initialStream;
+      const hasLiveTracks = initialStream.getTracks().some(track => track.readyState === 'live');
+      setCameraReady(hasLiveTracks);
+      if (!hasLiveTracks) {
+        setCaptureError('انتهت صلاحية الكاميرا أو الميكروفون. أنهِ البث وأعد المحاولة.');
       }
-    } else {
-      navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', aspectRatio: 9 / 16, width: { ideal: 720, max: 1080 }, height: { ideal: 1280, max: 1920 }, frameRate: { ideal: 24, max: 30 } },
-        audio: true,
-      }).then(stream => {
-        streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
-      }).catch(err => {
-        console.error('الكاميرا غير متاحة:', err);
-        setCameraReady(true);
-      });
+
+      return () => {
+        initialStream.getTracks().forEach(track => track.stop());
+        if (streamRef.current === initialStream) streamRef.current = null;
+        if (videoRef.current) videoRef.current.srcObject = null;
+      };
     }
 
+    const capture = createCancelableMediaCapture(
+      () => navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', aspectRatio: 9 / 16, width: { ideal: 720, max: 1080 }, height: { ideal: 1280, max: 1920 }, frameRate: { ideal: 24, max: 30 } },
+        audio: true,
+      }),
+      stream => {
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+        setCameraReady(true);
+      },
+      error => {
+        console.error('تعذر تشغيل كاميرا أو ميكروفون البث:', error);
+        setCameraReady(false);
+        setCaptureError('تعذر تشغيل الكاميرا أو الميكروفون. تحقق من أذونات المتصفح وأعد المحاولة.');
+      },
+    );
+    void capture.start();
+
     return () => {
-      streamRef.current?.getTracks().forEach(t => t.stop());
+      // Dispose first: a pending getUserMedia may resolve after this cleanup.
+      // The helper stops every late track and ignores old permission errors.
+      capture.dispose();
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [initialStream]);
+  }, [initialStream, cameraAttempt]);
 
   // ── Wake Lock ──
   useEffect(() => {
@@ -799,6 +828,8 @@ export default function ActiveLiveRoom({
 
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
+  const broadcastProblem = captureError || liveKitError;
+
   const roomContent = (
     <div style={styles.root}>
       <style>{globalStyles}</style>
@@ -880,13 +911,13 @@ export default function ActiveLiveRoom({
       {!mediaPublished && (
         <div
           onClick={event => event.stopPropagation()}
-          role={liveKitError ? 'alert' : 'status'}
+          role={broadcastProblem ? 'alert' : 'status'}
           style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(3, 7, 18, 0.92)', color: '#fff', padding: 22, textAlign: 'center' }}
         >
           <div style={{ maxWidth: 340, display: 'flex', alignItems: 'center', flexDirection: 'column', gap: 14 }}>
-            <strong>{liveKitError ? 'تعذر توصيل البث للمشاهدين' : 'جاري تجهيز الاتصال بالبث...'}</strong>
-            {liveKitError && <p style={{ color: '#fecaca', fontSize: '0.87rem', margin: 0 }}>{liveKitError}</p>}
-            {liveKitError && <button type="button" onClick={retryMediaConnection} style={{ border: 0, borderRadius: 10, background: '#0e7490', color: '#fff', padding: '12px 18px', fontWeight: 700 }}>إعادة الاتصال</button>}
+            <strong>{broadcastProblem ? 'تعذر تجهيز البث للمشاهدين' : 'جاري تجهيز الاتصال بالبث...'}</strong>
+            {broadcastProblem && <p style={{ color: '#fecaca', fontSize: '0.87rem', margin: 0 }}>{broadcastProblem}</p>}
+            {broadcastProblem && <button type="button" onClick={retryMediaConnection} style={{ border: 0, borderRadius: 10, background: '#0e7490', color: '#fff', padding: '12px 18px', fontWeight: 700 }}>إعادة الاتصال</button>}
             <button type="button" onClick={() => setShowEndModal(true)} style={{ border: '1px solid rgba(255,255,255,.3)', borderRadius: 10, background: 'rgba(255,255,255,.12)', color: '#fff', padding: '10px 16px' }}>إنهاء البث</button>
           </div>
         </div>
@@ -904,7 +935,7 @@ export default function ActiveLiveRoom({
   );
 
   // إذا تم استلام مفتاح LiveKit، نقوم بتغليف الواجهة به للاتصال بالخادم
-  if (liveKitToken && !liveKitError) {
+  if (liveKitToken && !broadcastProblem) {
     return (
       <LiveKitRoom
         key={`${streamId}-${connectionAttempt}`}
