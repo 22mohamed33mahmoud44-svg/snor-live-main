@@ -2,22 +2,42 @@ import { useState } from "react";
 import { supabase } from "./supabase";
 
 const PACKAGES = [
-  { id: "pkg_100", coins: 100, price: 10, label: "البداية", emoji: "⚡", color: "#6366f1", popular: false },
-  { id: "pkg_500", coins: 500, price: 45, label: "الأكثر شعبية", emoji: "🔥", color: "#f59e0b", popular: true },
-  { id: "pkg_1000", coins: 1000, price: 80, label: "أفضل قيمة", emoji: "👑", color: "#10b981", popular: false },
+  { id: "pkg_100", coins: 100, label: "البداية", emoji: "⚡", color: "#6366f1", popular: false },
+  { id: "pkg_500", coins: 500, label: "الأكثر شعبية", emoji: "🔥", color: "#f59e0b", popular: true },
+  { id: "pkg_1000", coins: 1000, label: "أفضل قيمة", emoji: "👑", color: "#10b981", popular: false },
 ];
 
-type Step = "select" | "loading" | "error";
+type Step = "select" | "loading" | "confirm" | "error";
+
+type CheckoutQuote = {
+  checkout_url: string;
+  amount_total: number;
+  currency: string;
+};
+
+// Stripe uses integer minor units. UGX/ISK are charged in hundredths for
+// compatibility; other standard zero-decimal presentment currencies are below.
+const ZERO_DECIMAL = new Set([
+  "BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA",
+  "PYG", "RWF", "VND", "VUV", "XAF", "XOF", "XPF",
+]);
+
+function formatCheckoutAmount(quote: CheckoutQuote): string {
+  const units = quote.amount_total / (ZERO_DECIMAL.has(quote.currency) ? 1 : 100);
+  return new Intl.NumberFormat("ar-EG", { style: "currency", currency: quote.currency }).format(units);
+}
 
 export default function BuyCoins({ onClose }: { onClose?: () => void }) {
   const [selectedPkg, setSelectedPkg] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("select");
   const [errorMsg, setErrorMsg] = useState("");
+  const [quote, setQuote] = useState<CheckoutQuote | null>(null);
   const handleBuy = async () => {
     if (!selectedPkg || step === "loading") return;
 
     setStep("loading");
     setErrorMsg("");
+    setQuote(null);
 
     try {
       const { data, error } = await supabase.functions.invoke("create-checkout", {
@@ -25,9 +45,19 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
       });
 
       if (error) throw error;
-      if (!data?.checkout_url) throw new Error("لم يتم تجهيز رابط الدفع");
+      if (typeof data?.checkout_url !== "string" ||
+          !data.checkout_url.startsWith("https://") ||
+          !Number.isSafeInteger(data.amount_total) || data.amount_total <= 0 ||
+          typeof data.currency !== "string" || !/^[A-Z]{3}$/.test(data.currency)) {
+        throw new Error("تعذر التأكد من السعر النهائي. حاول مجدداً.");
+      }
 
-      window.location.assign(data.checkout_url);
+      setQuote({
+        checkout_url: data.checkout_url,
+        amount_total: data.amount_total,
+        currency: data.currency,
+      });
+      setStep("confirm");
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : "حدث خطأ غير متوقع أثناء تجهيز الدفع");
       setStep("error");
@@ -76,7 +106,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
                 <div className="bc-pkg-emoji">{item.emoji}</div>
                 <div className="bc-pkg-coins">{item.coins.toLocaleString()}</div>
                 <div className="bc-pkg-lbl">كوينز</div>
-                <div className="bc-pkg-price">{item.price} جنيه</div>
+                <div className="bc-pkg-price">السعر النهائي عبر Stripe</div>
               </div>
             ))}
           </div>
@@ -84,7 +114,7 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
           {selectedPkg && (
             <div className="bc-form-container" style={{ textAlign: "center" }}>
               <p style={{ fontSize: "0.95rem", color: "rgba(255,255,255,0.7)", marginBottom: 16 }}>
-                لقد اخترت باقة <strong style={{ color: pkg?.color }}>{pkg?.coins} كوينز</strong> بمبلغ {pkg?.price} جنيه مصري.
+                اخترت باقة <strong style={{ color: pkg?.color }}>{pkg?.coins} كوينز</strong>. سنعرض المبلغ والعملة الفعليين قبل تحويلك إلى Stripe.
               </p>
               {errorMsg && <p className="bc-error-text">{errorMsg}</p>}
               <button onClick={handleBuy} className="bc-submit-btn">
@@ -92,6 +122,36 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
               </button>
             </div>
           )}
+
+      {step === "confirm" && quote && (
+        <div className="bc-loading-overlay" role="dialog" aria-modal="true"
+          aria-label="تأكيد سعر شراء العملات"
+          style={{ padding: 24, textAlign: "center", background: "rgba(5,5,10,0.97)" }}>
+          <div style={{ fontSize: 44 }}>🧾</div>
+          <h2 style={{ margin: "16px 0 10px" }}>راجع السعر قبل الدفع</h2>
+          <p style={{ color: "#cbd5e1", lineHeight: 1.8 }}>
+            باقة {pkg?.coins} كوينز
+          </p>
+          <strong style={{ fontSize: 26, color: "#fff", margin: "8px 0 18px" }}>
+            {formatCheckoutAmount(quote)}
+          </strong>
+          <p style={{ color: "#94a3b8", maxWidth: 340, marginBottom: 20 }}>
+            ده المبلغ اللي أعادته Stripe لهذه الجلسة. لن يتم خصم أي مبلغ إلا بعد إكمال الدفع في Stripe.
+          </p>
+          <button type="button" className="bc-submit-btn"
+            style={{ maxWidth: 340 }}
+            onClick={() => {
+              setStep("loading");
+              window.location.assign(quote.checkout_url);
+            }}>
+            متابعة الدفع على Stripe
+          </button>
+          <button type="button" onClick={() => { setQuote(null); setStep("select"); }}
+            style={{ background: "transparent", color: "#cbd5e1", border: 0, padding: 14, cursor: "pointer" }}>
+            إلغاء والعودة للباقات
+          </button>
+        </div>
+      )}
 
       {step === "loading" && (
         <div className="bc-loading-overlay">
