@@ -62,11 +62,16 @@ export function useAuth() {
         if (!res.ok) throw new Error(`Image fetch failed: ${res.status}`);
 
         const blob = await res.blob();
-        if (!blob.type.startsWith('image/')) throw new Error('Invalid image type');
+        const imageExtensions: Record<string, string> = {
+          'image/jpeg': 'jpg', 'image/png': 'png',
+          'image/webp': 'webp', 'image/gif': 'gif',
+        };
+        const extension = imageExtensions[blob.type];
+        if (!extension) throw new Error('Avatar file type is not supported');
         if (blob.size > 5 * 1024 * 1024) throw new Error('Image is larger than 5MB');
 
         // Storage RLS requires the first path segment to equal auth.uid().
-        const fileName = `${userId}/avatar-${Date.now()}.jpg`;
+        const fileName = `${userId}/avatar-${Date.now()}.${extension}`;
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('avatars')
           .upload(fileName, blob, { contentType: blob.type, upsert: true });
