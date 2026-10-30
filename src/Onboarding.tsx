@@ -1,4 +1,5 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { isAdultBirthdate, latestEligibleBirthdate } from './utils/ageEligibility';
 
 interface OnboardingData {
   birthdate: string;
@@ -24,15 +25,16 @@ export default function Onboarding({ onComplete, error }: OnboardingProps) {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!imagePreview) return;
+    return () => URL.revokeObjectURL(imagePreview);
+  }, [imagePreview]);
+
   const totalSteps = 4;
   const progress   = (step / totalSteps) * 100;
 
   /* ── Age validation ── */
-  const isAgeValid = () => {
-    if (!data.birthdate) return false;
-    const diff = Date.now() - new Date(data.birthdate).getTime();
-    return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)) >= 18;
-  };
+  const isAgeValid = () => isAdultBirthdate(data.birthdate);
 
   const canProceed = () => {
     if (step === 1) return isAgeValid();
@@ -41,7 +43,7 @@ export default function Onboarding({ onComplete, error }: OnboardingProps) {
     return true; // photo is optional
   };
 
-  const next = async () => {
+  const next = async (skipPhoto = false) => {
     if (submitting || !canProceed()) return;
     if (step < totalSteps) {
       setStep(s => s + 1);
@@ -49,13 +51,21 @@ export default function Onboarding({ onComplete, error }: OnboardingProps) {
     }
     setSubmitting(true);
     try {
-      await onComplete(data);
+      await onComplete(skipPhoto ? { ...data, profileImage: null } : data);
     } finally {
       // On failure the parent keeps onboarding visible and displays error.
       setSubmitting(false);
     }
   };
   const back = () => setStep(s => s - 1);
+
+  const skipPhoto = () => {
+    if (submitting) return;
+    setData(current => ({ ...current, profileImage: null }));
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    void next(true);
+  };
 
   /* ── Image handling ── */
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -113,7 +123,7 @@ export default function Onboarding({ onComplete, error }: OnboardingProps) {
               type="date"
               value={data.birthdate}
               onChange={e => setData(d => ({ ...d, birthdate: e.target.value }))}
-              max={new Date(Date.now() - 18 * 365.25 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+              max={latestEligibleBirthdate()}
               style={styles.dateInput}
             />
             {data.birthdate && !isAgeValid() && (
@@ -191,7 +201,7 @@ export default function Onboarding({ onComplete, error }: OnboardingProps) {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp,image/gif"
               style={{ display: 'none' }}
               onChange={handleImageChange}
             />
@@ -237,7 +247,7 @@ export default function Onboarding({ onComplete, error }: OnboardingProps) {
           )}
 
           {step === 4 && (
-            <button onClick={() => { void next(); }} disabled={submitting} style={styles.skipBtn}>تخطي</button>
+            <button onClick={skipPhoto} disabled={submitting} style={styles.skipBtn}>تخطي الصورة</button>
           )}
 
           <button
