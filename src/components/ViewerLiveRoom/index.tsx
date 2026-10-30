@@ -150,6 +150,9 @@ export default function ViewerLiveRoom({
         if (funcError || !data?.token) {
           throw funcError ?? new Error('No live stream token returned');
         }
+        // The old room was unmounted before this new token can connect.
+        // Re-enable error handling so retry attempts fail promptly if needed.
+        suppressDisconnectRef.current = false;
         setLiveKitToken(data.token);
       } catch (error) {
         if (isCancelled) return;
