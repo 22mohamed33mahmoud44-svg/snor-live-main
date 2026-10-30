@@ -291,7 +291,7 @@ jobs:
           deno check --no-lock --node-modules-dir=auto supabase/functions/create-checkout/index.ts
 
       - name: Test new-account profile field requirements
-        run: deno test src/utils/profileDefaults.test.ts
+        run: deno test tests/unit/profileDefaults.test.ts
 
       - name: Check signed LiveKit token media permissions
         run: deno test --allow-env --no-lock --node-modules-dir=auto supabase/functions/livekit-token/token-grants.test.mjs
