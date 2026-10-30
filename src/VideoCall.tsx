@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from './supabase';
+import { endMatchOnServer } from './utils/endMatchOnServer';
 import { LiveKitRoom, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
@@ -40,6 +41,8 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
   const [camOff, setCamOff] = useState(false);
   const [tokenLoading, setTokenLoading] = useState(true);
   const [retryKey, setRetryKey] = useState(0);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const leavingRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -62,6 +65,21 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
     return () => { isMounted = false; };
   }, [matchId, userId, retryKey]);
 
+  const leaveFailedCall = async () => {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    setLeaveError(null);
+    try {
+      if (await endMatchOnServer(matchId)) {
+        onEnd();
+      } else {
+        setLeaveError('تعذر إنهاء المكالمة في قاعدة البيانات. تحقق من الإنترنت وحاول مجدداً.');
+      }
+    } finally {
+      leavingRef.current = false;
+    }
+  };
+
   const retryConnection = () => {
     setError(null);
     setToken(null);
@@ -76,7 +94,7 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
       connection_failed: { icon: <VideoIcon />, title: 'تعذر الاتصال بالفيديو', desc: 'حدثت مشكلة أثناء الاتصال بخدمة الفيديو. تحقق من الإنترنت وحاول مرة أخرى.', showRetry: true, showEnd: true },
     };
     const e = errorMessages[error];
-    return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box">{e.icon}</div><h2>{e.title}</h2><p>{e.desc}</p><div style={{ display: 'flex', gap: 14 }}>{e.showRetry && <button type="button" className="vc-err-btn primary" onClick={retryConnection}>إعادة الاتصال</button>}{e.showEnd && <button type="button" className="vc-err-btn secondary" onClick={onEnd}>مغادرة الغرفة</button>}</div></div>;
+    return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box">{e.icon}</div><h2>{e.title}</h2><p>{e.desc}</p><div style={{ display: 'flex', gap: 14 }}>{e.showRetry && <button type="button" className="vc-err-btn primary" onClick={retryConnection}>إعادة الاتصال</button>}{e.showEnd && <button type="button" className="vc-err-btn secondary" onClick={() => { void leaveFailedCall(); }}>مغادرة الغرفة</button>}</div>{leaveError && <p role="alert">{leaveError}</p>}</div>;
   }
 
   if (tokenLoading || !token) return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box"><VideoIcon /></div><h2>جاري تجهيز الاتصال</h2><p>نقوم بتجهيز الاتصال الآمن بالفيديو، لحظات...</p></div>;
@@ -166,14 +184,8 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext, muted, set
     if (endingRef.current) return;
     endingRef.current = true;
     // Do not write to signals after ending: RLS rejects that insert.
-    const { error } = await supabase.from('matches')
-      .update({ status: 'ended' })
-      .eq('id', matchId)
-      .eq('status', 'active');
-
-    if (error) {
+    if (!(await endMatchOnServer(matchId))) {
       endingRef.current = false;
-      console.error('Could not end match in database', error);
       window.alert('تعذر إنهاء المكالمة على الخادم. حاول مرة أخرى.');
       return;
     }
