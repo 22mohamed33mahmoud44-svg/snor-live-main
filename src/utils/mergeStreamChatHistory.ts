@@ -24,5 +24,8 @@ export function mergeStreamChatHistory<T extends {
     if (!right.created_at) return -1;
     return left.created_at.localeCompare(right.created_at);
   });
-  return ordered.slice(-Math.max(0, limit));
+  // Array#slice(-0) is equivalent to slice(0), so a zero cap needs
+  // an explicit empty result rather than accidentally returning every row.
+  if (limit <= 0) return [];
+  return ordered.slice(-Math.floor(limit));
 }
