@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Heart, Users, Gift, Sparkles } from 'lucide-react';
 
 // استيراد مكونات LiveKit الحديثة
-import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useTracks, type TrackReference } from '@livekit/components-react';
+import { LiveKitRoom, RoomAudioRenderer, StartAudio, VideoTrack, useTracks, type TrackReference } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import '@livekit/components-styles';
 
@@ -431,7 +431,9 @@ export default function ViewerLiveRoom({
           {liveKitToken ? (
             <LiveKitRoom
               video={false}
-              audio={true}
+              // Viewers subscribe to broadcaster tracks; they must never
+              // request/publish microphone or camera tracks themselves.
+              audio={false}
               token={liveKitToken}
               serverUrl={import.meta.env.VITE_LIVEKIT_URL}
               connect={true}
@@ -439,6 +441,26 @@ export default function ViewerLiveRoom({
             >
               <LiveStreamVideoRenderer />
               <RoomAudioRenderer />
+              {/* Browsers may block remote audio until a viewer clicks. */}
+              <StartAudio
+                label="اضغط لتشغيل صوت البث"
+                style={{
+                  position: 'absolute',
+                  top: '42%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  zIndex: 30,
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: 12,
+                  background: '#0e7490',
+                  color: '#fff',
+                  fontFamily: 'Cairo, sans-serif',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  padding: '12px 16px',
+                  cursor: 'pointer',
+                }}
+              />
             </LiveKitRoom>
           ) : (
             <div style={{ width: '100%', height: '100%', background: 'linear-gradient(to bottom, #110e26, #03030a)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
