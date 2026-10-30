@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../../supabase';
 import { createCallMessageSender } from '../../utils/callMessageSender';
+import { mergeStreamChatHistory } from '../../utils/mergeStreamChatHistory';
 import { motion, AnimatePresence } from 'framer-motion';
 // تم إزالة الأيقونة 'X' غير المستخدمة لتنظيف الكود
 import { Heart, Users, Gift, Sparkles } from 'lucide-react';
@@ -33,6 +34,7 @@ interface ChatMessage {
   user_id: string;
   username: string;
   message: string;
+  created_at?: string;
 }
 
 interface FloatingHeart {
@@ -55,6 +57,7 @@ type RealtimeChatMessage = {
   user_id: string;
   username: string;
   message: string;
+  created_at?: string;
 };
 
 
@@ -252,7 +255,7 @@ export default function ViewerLiveRoom({
         .from('stream_chat')
         .select('*')
         .eq('stream_id', streamId)
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })
         .limit(MESSAGES_LIMIT);
 
       if (error) {
@@ -260,9 +263,13 @@ export default function ViewerLiveRoom({
         return;
       }
       if (data && isMounted) {
-        setMessages(data.map(m => ({
-          id: m.id, stream_id: m.stream_id, user_id: m.user_id, username: m.username, message: m.message
-        })));
+        const recentHistory: ChatMessage[] = data.slice().reverse().map(m => ({
+          id: m.id, stream_id: m.stream_id, user_id: m.user_id,
+          username: m.username, message: m.message, created_at: m.created_at,
+        }));
+        // A Realtime INSERT or local pending send can arrive before the
+        // historical query resolves. Do not overwrite those messages.
+        setMessages(current => mergeStreamChatHistory(recentHistory, current, MESSAGES_LIMIT));
       }
     };
 
