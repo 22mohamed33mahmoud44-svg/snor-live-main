@@ -202,6 +202,43 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030030000_023_owner_profile_privacy.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_privacy_assertions.sql
 
+  profile-age-database-tests:
+    name: Enforce adult birthdate on writable profiles view with PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Check staged server-side age enforcement with real permissions
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_privacy_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030030000_023_owner_profile_privacy.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_age_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_profile_adult_birthdate_guard.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_age_assertions.sql
+
   anon-rpc-security-tests:
     name: Verify privileged RPCs reject anonymous calls
     runs-on: ubuntu-latest
