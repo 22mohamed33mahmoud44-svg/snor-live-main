@@ -553,6 +553,9 @@ jobs:
       - name: Serialize stream launch requests and retry after failed writes
         run: deno test tests/unit/streamLaunchGate.test.ts
 
+      - name: Explain cross-device active stream conflicts accurately
+        run: deno test tests/unit/streamLaunchError.test.ts
+
       - name: Keep call-chat drafts on failed message sends
         run: deno test tests/unit/callMessageSender.test.ts
 
