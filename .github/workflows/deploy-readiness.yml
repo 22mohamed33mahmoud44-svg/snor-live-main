@@ -44,6 +44,9 @@ jobs:
       - name: Ensure stream shutdown is confirmed by the server before unmount
         run: node --test tests/unit/liveStreamShutdownWiring.test.mjs
 
+      - name: Check broadcaster and viewer chat draft safety
+        run: node --test tests/unit/liveStreamChatWiring.test.mjs
+
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
