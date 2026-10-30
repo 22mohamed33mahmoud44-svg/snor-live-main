@@ -8,6 +8,7 @@ DECLARE
   bob uuid := '22222222-2222-4222-8222-222222222222';
   v_call uuid;
   v_status text;
+  v_type text;
 BEGIN
   -- The original INSERT policy would allow these two waiting users to create
   -- arbitrary room records. The replacement must reject direct INSERT.
@@ -27,11 +28,21 @@ BEGIN
     WHEN insufficient_privilege THEN NULL;
   END;
 
-  v_call := public.create_direct_call(bob);
+  -- Reject unknown call types before creating an invitation.
+  BEGIN
+    PERFORM public.create_direct_call(bob, 'unsupported');
+    RAISE EXCEPTION 'Invalid call type accepted';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM = 'Invalid call type accepted' THEN RAISE; END IF;
+  END;
+
+  v_call := public.create_direct_call(bob, 'audio');
   IF v_call IS NULL THEN RAISE EXCEPTION 'Invitation was not created'; END IF;
 
   SELECT status INTO v_status FROM public.matches WHERE id=v_call;
   IF v_status <> 'pending' THEN RAISE EXCEPTION 'Direct invitation not pending'; END IF;
+  SELECT call_type INTO v_type FROM public.matches WHERE id=v_call;
+  IF v_type <> 'audio' THEN RAISE EXCEPTION 'Audio invitation type was lost: %', v_type; END IF;
 
   IF public.respond_direct_call(v_call,true) IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'Caller accepted their own invitation';
