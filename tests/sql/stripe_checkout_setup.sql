@@ -21,6 +21,10 @@ CREATE TABLE public.transactions (
   amount integer NOT NULL,
   meta jsonb NOT NULL
 );
+
+-- Reproduce the actual pre-release production constraint that rejects 'buy'.
+ALTER TABLE public.transactions ADD CONSTRAINT transactions_type_check
+  CHECK (type IN ('spend', 'earn', 'bonus', 'refund'));
 CREATE OR REPLACE FUNCTION public.add_coins(
   p_user_id uuid, p_amount integer, p_meta jsonb DEFAULT '{}'::jsonb
 )
