@@ -35,6 +35,9 @@ jobs:
       - name: Ensure LiveKit remote audio rendering and playback recovery are wired
         run: node --test tests/unit/livekitAudioRendering.test.mjs
 
+      - name: Ensure call mute and camera controls update LiveKit tracks
+        run: node --test tests/unit/livekitMediaControls.test.mjs
+
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
