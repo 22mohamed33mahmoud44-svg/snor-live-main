@@ -20,3 +20,17 @@ export function resolveCheckoutPrice(packageId, prices) {
   const price = prices[packageId];
   return typeof price === 'string' && price.trim().length > 0 ? price : null;
 }
+
+export function buildCheckoutRedirects(appUrl) {
+  const url = new URL(appUrl);
+  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === 'localhost')) ||
+      url.username || url.password) {
+    throw new Error('Invalid configured app origin');
+  }
+  // Stripe must receive the unescaped, literal placeholder in success_url.
+  const origin = url.origin;
+  return {
+    successUrl: `${origin}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancelUrl: `${origin}/?payment=cancelled`,
+  };
+}
