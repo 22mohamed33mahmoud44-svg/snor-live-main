@@ -35,6 +35,9 @@ jobs:
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
+      - name: Test Stripe webhook paid-price and buyer verification
+        run: node --test supabase/functions/stripe-webhook/checkout-credit-validation.test.mjs
+
       - name: Verify deploy/database readiness
         run: node scripts/verify-deploy-readiness.mjs
 
