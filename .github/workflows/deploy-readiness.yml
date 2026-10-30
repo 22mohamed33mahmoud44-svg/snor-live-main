@@ -428,6 +428,9 @@ jobs:
       - name: Prevent incomplete profiles and failed profile lookups from reaching dashboard
         run: deno test tests/unit/profileGate.test.ts
 
+      - name: Validate age at exact birthday boundaries
+        run: deno test tests/unit/ageEligibility.test.ts
+
       - name: Check signed LiveKit token media permissions
         run: deno test --allow-env --no-lock --node-modules-dir=auto supabase/functions/livekit-token/token-grants.test.mjs
 
