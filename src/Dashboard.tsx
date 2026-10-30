@@ -47,6 +47,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   // 🆕 البث المباشر
   const [showLiveStudio, setShowLiveStudio] = useState(false);
   const [activeLiveStream, setActiveLiveStream] = useState<{ id: string, title: string; filterId: string; stream?: MediaStream | null } | null>(null);
+  const liveLaunchPendingRef = useRef(false);
 
   // ── Handlers ─────────────────────────────────────────────────
   // A direct call is a pending database invitation, not a client-generated LiveKit room.
@@ -250,26 +251,39 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       document.body,
     ) : null;
 
-  const handleLaunchLiveStream = async (title: string, filterId: string, _intensity?: number, stream?: MediaStream | null) => {
-    const { data, error } = await supabase
-      .from('live_streams')
-      .insert([
-        {
+  const handleLaunchLiveStream = async (
+    title: string, filterId: string, _intensity?: number, stream?: MediaStream | null,
+  ): Promise<boolean> => {
+    // The studio also locks its button, but this protects the database path
+    // if more than one caller tries to create a live_streams row.
+    if (liveLaunchPendingRef.current || activeLiveStream || !stream || !stream.getTracks().length) return false;
+    liveLaunchPendingRef.current = true;
+    try {
+      const { data, error } = await supabase
+        .from('live_streams')
+        .insert([{
           user_id: String(userId),
           title: title || 'بث مباشر جديد',
           streamer_name: myProfile?.full_name || 'مستخدم سنور',
           is_live: true,
-        }
-      ]).select().single();
+        }])
+        .select('id')
+        .single();
 
-    if (error) {
-      console.error("خطأ في تسجيل البث:", error);
-      alert("حدث خطأ أثناء الاتصال بالخادم. تأكد من جودة الإنترنت وحاول مجدداً.");
-      return;
+      if (error || !data?.id) {
+        console.error('تعذر تسجيل البث:', error ?? 'No stream ID returned');
+        return false;
+      }
+
+      setActiveLiveStream({ id: data.id, title, filterId, stream });
+      setShowLiveStudio(false);
+      return true;
+    } catch (error) {
+      console.error('فشل إنشاء البث:', error);
+      return false;
+    } finally {
+      liveLaunchPendingRef.current = false;
     }
-
-    setShowLiveStudio(false);
-    setActiveLiveStream({ id: data.id, title, filterId, stream });
   };
 
   useEffect(() => {
