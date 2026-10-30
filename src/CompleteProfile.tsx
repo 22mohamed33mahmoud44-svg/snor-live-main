@@ -43,8 +43,16 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
 
       // 1. رفع الصورة
       if (avatar) {
-        const fileExt = avatar.name.split('.').pop();
-        const fileName = `${userId}.${fileExt}`;
+        const fileTypes: Record<string, string> = {
+          'image/jpeg': 'jpg', 'image/png': 'png',
+          'image/webp': 'webp', 'image/gif': 'gif',
+        };
+        const fileExt = fileTypes[avatar.type];
+        if (!fileExt || avatar.size > 5 * 1024 * 1024) {
+          throw new Error('اختر صورة مدعومة بحجم لا يتجاوز 5 ميجابايت');
+        }
+        // Storage INSERT policy requires a user-id folder.
+        const fileName = `${userId}/avatar-${Date.now()}.${fileExt}`;
         const { error: uploadError } = await supabase.storage
           .from('avatars')
           .upload(fileName, avatar, { upsert: true });
