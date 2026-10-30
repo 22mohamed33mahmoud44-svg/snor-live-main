@@ -290,10 +290,9 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     return (
       <>
       <ActiveLiveRoom streamId={activeLiveStream.id} title={activeLiveStream.title} filterId={activeLiveStream.filterId} initialStream={activeLiveStream.stream} myUserId={userId} myUsername={myProfile?.full_name || "مستضيف البث"}
-        onEndStream={async () => {
-          await supabase.from('live_streams').update({ is_live: false }).eq('id', activeLiveStream.id);
-          setActiveLiveStream(null);
-        }} 
+        // ActiveLiveRoom already confirms an owner-scoped database update.
+        // Unmount only after that operation succeeded; never duplicate it here.
+        onEndStream={() => setActiveLiveStream(null)} 
       />
       {callOverlay}
       </>
