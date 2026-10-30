@@ -1,6 +1,16 @@
 -- Credit verified Stripe checkout events exactly once in a single transaction.
 -- Only the service role (used by the verified webhook) may call this RPC.
 
+-- Critical: widening the ledger constraint to permit 'buy' must never
+-- make direct coin minting available to browser-issued JWTs.
+-- Production already restricts add_coins to service_role; enforce that same
+-- rule on staging and all future deployments, including deployments where
+-- the function was created with PostgreSQL's default PUBLIC EXECUTE grant.
+REVOKE ALL ON FUNCTION public.add_coins(uuid,integer,jsonb)
+FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.add_coins(uuid,integer,jsonb)
+TO service_role;
+
 -- PRODUCTION COMPATIBILITY: public.add_coins() logs the transaction type 'buy',
 -- but the deployed transactions_type_check currently permits only
 -- spend/earn/bonus/refund. That makes every valid checkout roll back.
