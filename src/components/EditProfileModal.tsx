@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../supabase';
+import { saveOwnProfile } from '../utils/saveOwnProfile';
 
 type ProfileData = {
   id: string;
@@ -7,7 +8,6 @@ type ProfileData = {
   username?: string;
   avatar_url?: string;
   gender?: string;
-  updated_at?: string;
 };
 
 interface EditProfileModalProps {
@@ -88,14 +88,14 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
         username: sanitizedUsername,
         gender,
         avatar_url: avatarUrl,
-        updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
-        .from('profiles')
-        .upsert(updatedData);
-
-      if (error) throw error;
+      await saveOwnProfile(myProfile.id, {
+        full_name: fullName,
+        username: sanitizedUsername,
+        gender,
+        avatar_url: avatarUrl,
+      });
 
       onProfileUpdated(updatedData);
       onClose();
