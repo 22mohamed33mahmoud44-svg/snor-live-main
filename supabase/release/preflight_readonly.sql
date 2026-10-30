@@ -51,6 +51,15 @@ planned(requirement, is_applied, reason) AS (
   VALUES
     ('Atomic checkout RPC', to_regprocedure('public.credit_stripe_checkout_event(text,text,uuid,integer,text,text)') IS NOT NULL,
       'PR #9 SQL must be applied before stripe-webhook deployment'),
+    ('Stripe buy ledger type permitted',
+      EXISTS (
+        SELECT 1 FROM pg_constraint c
+        WHERE c.conrelid = 'public.transactions'::regclass
+          AND c.conname = 'transactions_type_check'
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) LIKE '%''buy''::text%'
+      ),
+      'Production add_coins writes buy, so the existing 4-type check must be widened first'),
     ('Stripe checkout session key',
       EXISTS(SELECT 1 FROM information_schema.columns
              WHERE table_schema='public' AND table_name='stripe_events'
