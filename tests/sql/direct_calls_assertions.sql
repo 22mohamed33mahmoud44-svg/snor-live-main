@@ -72,6 +72,13 @@ BEGIN
   IF public.respond_direct_call(call_id,true) IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'Non-participant accepted a direct invitation';
   END IF;
+
+  -- The browser must not treat an unauthorized 0-row UPDATE as success.
+  UPDATE public.matches SET status='ended'
+  WHERE id=call_id AND status='active';
+  IF FOUND THEN
+    RAISE EXCEPTION 'Unrelated caller changed another users call status';
+  END IF;
 END;
 $$;
 
@@ -106,6 +113,17 @@ BEGIN
   -- Production deletes signals when status becomes ended.
   IF EXISTS (SELECT 1 FROM public.signals WHERE match_id=call_id) THEN
     RAISE EXCEPTION 'Match-ending trigger did not clean up signals';
+  END IF;
+
+  -- Match-ending is idempotent: a second UPDATE with status='active'
+  -- returns zero rows and the client must verify status='ended' separately.
+  UPDATE public.matches SET status='ended'
+  WHERE id=call_id AND status='active';
+  IF FOUND THEN
+    RAISE EXCEPTION 'Already ended call matched a second active UPDATE';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.matches WHERE id=call_id AND status='ended') THEN
+    RAISE EXCEPTION 'Already ended call could not be verified';
   END IF;
 
   -- This used to be the broken client flow: INSERT end signal after the
