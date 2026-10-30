@@ -1,3 +1,56 @@
+-- Simulate browser JWT roles, not just the postgres fixture owner.
+-- A service-only wallet mint RPC must stay inaccessible after enabling 'buy'.
+DO $wallet_privileges$
+BEGIN
+  IF has_function_privilege('anon','public.add_coins(uuid,integer,jsonb)','EXECUTE')
+    OR has_function_privilege('authenticated','public.add_coins(uuid,integer,jsonb)','EXECUTE')
+    OR has_function_privilege('anon','public.credit_stripe_checkout_event(text,text,uuid,integer,text,text)','EXECUTE')
+    OR has_function_privilege('authenticated','public.credit_stripe_checkout_event(text,text,uuid,integer,text,text)','EXECUTE') THEN
+    RAISE EXCEPTION 'Browser roles can mint coins directly';
+  END IF;
+  IF NOT has_function_privilege('service_role','public.add_coins(uuid,integer,jsonb)','EXECUTE')
+    OR NOT has_function_privilege('service_role','public.credit_stripe_checkout_event(text,text,uuid,integer,text,text)','EXECUTE') THEN
+    RAISE EXCEPTION 'Stripe webhook service role cannot credit a validated checkout';
+  END IF;
+END;
+$wallet_privileges$;
+
+SET ROLE authenticated;
+DO $browser_cannot_mint$
+BEGIN
+  BEGIN
+    PERFORM public.add_coins(
+      '11111111-1111-4111-8111-111111111111',99999,'{}'::jsonb
+    );
+    RAISE EXCEPTION 'Signed-in browser minted coins';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.credit_stripe_checkout_event(
+      'evt_fake_browser','checkout.session.completed',
+      '11111111-1111-4111-8111-111111111111',100,'cs_fake_browser','pkg_100'
+    );
+    RAISE EXCEPTION 'Signed-in browser called Stripe webhook credit RPC';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+END;
+$browser_cannot_mint$;
+RESET ROLE;
+
+SET ROLE anon;
+DO $anonymous_cannot_mint$
+BEGIN
+  BEGIN
+    PERFORM public.add_coins(
+      '11111111-1111-4111-8111-111111111111',99999,'{}'::jsonb
+    );
+    RAISE EXCEPTION 'Anonymous browser minted coins';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+END;
+$anonymous_cannot_mint$;
+RESET ROLE;
+
 DO $$
 DECLARE
   buyer uuid := '11111111-1111-4111-8111-111111111111';
