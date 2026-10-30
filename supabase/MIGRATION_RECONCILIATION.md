@@ -2,7 +2,7 @@
 
 ## Current state
 
-Production project `ogzrothtgxupawgjbioc` currently reports **35 applied migrations**.
+Production project `ogzrothtgxupawgjbioc` currently reports **36 applied migrations** (verified 2026-10-30).
 
 The repository `main` branch currently contains **18 timestamped migration files** plus the legacy marker `001_coins_system.sql`.
 
@@ -13,7 +13,9 @@ The first four timestamped versions are present in both Production and the repos
 - `20260819003311` — `ensure_live_stream_cleanup`
 - `20260819003623` — `restore_batched_stream_likes`
 
-Production then has a separate security/repair chain starting at `20260822011814` and ending at `20260822205256` (32 additional production migrations).
+Production then has a separate security/repair chain starting at `20260822011814` and ending at `20260822205256` (31 additional production migrations), followed by a Stripe payment migration on 2026-09-08 (one more production migration).
+
+Production also contains **`20260908221940` — `019_stripe_only_payments`**, which is absent from `main`. It must be recovered or otherwise reconciled before replaying migration history.
 
 The repository instead has timestamped migrations from `20260820000000` through `20260901000000` for the feature/phase work in the current codebase.
 
@@ -59,6 +61,7 @@ The following versions are currently recorded in Production but are not represen
 20260822020056 enforce_nonnull_relations_and_server_heartbeat_20260822
 20260822020209 lock_private_schema_default_privileges_20260822
 20260822205256 sync_storage_buckets_and_policies_20260822
+20260908221940 019_stripe_only_payments
 ```
 
 ## Git history evidence
@@ -84,3 +87,30 @@ The current `20260901000000_018_storage_avatars.sql` is the later storage migrat
 Production is ahead of the checked-in repository and contains a security hardening chain whose exact SQL is not currently represented by same-version migration files on `main`.
 
 This document records the mismatch so future deploy tooling does not try to replay the current repository chain blindly against Production.
+
+## Release coordination after 2026-10-30 audit
+
+The following independent draft PRs contain proposed changes **not yet applied** to the live database or released to production:
+
+| PR | Area | Backend requirement |
+| --- | --- | --- |
+| #9 | Atomic Stripe credits | Run and validate Stripe credit RPC migration, then deploy the updated `stripe-webhook` Edge Function |
+| #10 | Authorized LiveKit direct calls | Run invitation/match SQL migration, then deploy `livekit-token` Edge Function and its corresponding frontend |
+| #11 | Canonical gift pricing | Apply gift accounting SQL only after verifying paid-show bundles and testing live catalog prices |
+| #12 | Profile privacy | Carefully stage owner-only profile and public discovery view permissions; coordinate with frontend and LiveKit function |
+| #13 | Anonymous RPC permissions | Test and apply restricted EXECUTE grants for user-specific RPCs |
+| #14 | Leaderboard materialized view permissions | Revoke direct Data API access for 3 materialized views; preserve service-role access |
+
+**Do not merge all PR branches independently and assume the result is deployable.** #10 and #12 both modify the `src/Dashboard.tsx` and `supabase/functions/livekit-token/index.ts` paths. Integration must resolve those overlaps and rerun every SQL test on one combined candidate.
+
+### Safe promotion checklist
+
+1. Obtain an off-production database or an isolated schema-compatible clone and establish a reliable schema baseline; do not reset or run `db push` against the live database while histories differ.
+2. Reconcile the 31 August 22 production-only migration versions and the September 8 Stripe migration from a trusted backup, prior Git history, or the original deployment source. Compare schema objects rather than assuming same names mean same SQL.
+3. Prepare a combined integration branch preserving the call-auth changes, the profile-discovery query updates, and the payment/gift policies. Run existing TypeScript/build checks and each isolated PostgreSQL test suite against its feature changes, then validate cross-feature behavior.
+4. Run staging account-level acceptance tests with at least two test users: signup/profile edits, chat, calls (pending/accepted/declined/ended), gift and paid show accounting, Stripe sandbox webhook replay and retries.
+5. Apply reviewed SQL to staging and validate Supabase Advisors and privileges. Explicitly review `SECURITY DEFINER` view and function findings that still remain.
+6. After an approved production maintenance plan and a tested rollback/restore path exist, apply compatible forward SQL in the correct order. Coordinate any changed Edge Functions with their frontend versions. Vercel preview build success does not validate Edge Function deployment.
+7. Validate payment idempotency and wallet ledger, run live smoke checks, then promote the tested frontend release and monitor Supabase and Vercel. If any migration fails, stop rather than replaying the whole migration directory.
+
+No automated production release is authorized by this document.
