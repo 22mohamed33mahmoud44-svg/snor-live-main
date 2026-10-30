@@ -59,6 +59,36 @@ BEGIN
 END;
 $$;
 
+-- Mirror the frontend's new save flow: first INSERT then owner UPDATE.
+-- Using a view UPsert (INSERT .. ON CONFLICT) is deliberately avoided.
+SELECT set_config('request.jwt.claim.sub','44444444-4444-4444-8444-444444444444',false);
+DO $new_profile$
+DECLARE
+  my_id uuid := '44444444-4444-4444-8444-444444444444';
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.profiles WHERE id = my_id) THEN
+    RAISE EXCEPTION 'New profile unexpectedly exists';
+  END IF;
+
+  INSERT INTO public.profiles (id, username, gender, birthdate)
+  VALUES (my_id, 'new_user', 'female', DATE '2000-01-02');
+
+  UPDATE public.profiles SET full_name='New User' WHERE id=my_id;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id=my_id AND username='new_user' AND full_name='New User'
+  ) THEN
+    RAISE EXCEPTION 'New owner INSERT/UPDATE flow failed';
+  END IF;
+
+  BEGIN
+    UPDATE public.profiles SET username='bad_edit' WHERE id =
+      '11111111-1111-4111-8111-111111111111';
+    IF FOUND THEN RAISE EXCEPTION 'Could edit another owner'; END IF;
+  END;
+END;
+$new_profile$;
+
 RESET ROLE;
 SET ROLE anon;
 DO $$
