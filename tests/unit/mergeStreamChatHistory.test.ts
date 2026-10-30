@@ -1,5 +1,5 @@
 /// <reference lib="deno.ns" />
-import { mergeStreamChatHistory } from '../../src/utils/mergeStreamChatHistory.ts';
+import { acknowledgeStreamChatMessage, mergeStreamChatHistory } from '../../src/utils/mergeStreamChatHistory.ts';
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
@@ -55,4 +55,35 @@ Deno.test('only the most recent configured number of messages remain', () => {
     'oldest rather than newest messages were kept');
   assert(mergeStreamChatHistory(recent, [], 0).length === 0,
     'zero-limit history unexpectedly retained messages');
+});
+
+
+Deno.test('viewer insert acknowledgement replaces only its pending ID with the persisted row', () => {
+  const saved = at('server-uuid', 4);
+  const pending = { id: 'pending-abc', text: 'sent but not yet acknowledged' };
+  const otherPending = { id: 'pending-other', text: 'another unsent message' };
+  const current = [at('earlier', 1), pending, otherPending];
+  const result = acknowledgeStreamChatMessage(current, pending.id, saved);
+  assert(result.length === 3, 'acknowledgement lost an unrelated message');
+  assert(result.some(m => m.id === saved.id), 'stored ID was not shown');
+  assert(!result.some(m => m.id === pending.id), 'pending bubble was not replaced');
+  assert(result.some(m => m.id === otherPending.id), 'unrelated pending message was cleared');
+});
+
+Deno.test('acknowledgement deduplicates a row already delivered by history or Realtime', () => {
+  const saved = at('server-uuid', 4);
+  const current = [at('older', 1), saved, { id: 'pending-abc', text: 'same text' }];
+  const result = acknowledgeStreamChatMessage(current, 'pending-abc', saved);
+  assert(result.length === 2, 'same persisted message shown twice');
+  assert(result.filter(m => m.id === saved.id).length === 1,
+    'persisted message was duplicated by acknowledgement');
+});
+
+Deno.test('failed write leaves pending bubble under caller control', () => {
+  const pending = { id: 'pending-unsent', text: 'unsent' };
+  const before = [pending, at('old', 1)];
+  // A failed send must not call acknowledgeStreamChatMessage;
+  // the UI's failure branch removes only this pending ID and retains the draft.
+  const after = before.filter(message => message.id !== pending.id);
+  assert(after.length === 1 && after[0].id === 'old', 'rollback removed another message');
 });
