@@ -41,6 +41,9 @@ jobs:
       - name: Check viewer-only subscription and broadcaster media publishing
         run: node --test tests/unit/liveStreamMediaWiring.test.mjs
 
+      - name: Ensure stream shutdown is confirmed by the server before unmount
+        run: node --test tests/unit/liveStreamShutdownWiring.test.mjs
+
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
@@ -479,6 +482,9 @@ jobs:
 
       - name: Test cancellation never terminates a direct call
         run: deno test tests/unit/cancelRandomMatch.test.ts
+
+      - name: Prevent phantom live streams when end calls fail
+        run: deno test tests/unit/endLiveStreamOnServer.test.ts
 
       - name: Keep call-chat drafts on failed message sends
         run: deno test tests/unit/callMessageSender.test.ts
