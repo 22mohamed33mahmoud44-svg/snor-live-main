@@ -36,7 +36,7 @@ test('viewer retains its draft until confirmed and does not block on thrown netw
   assert.match(viewer, /createCallMessageSender\(async \(message: string\)/);
   assert.match(handler, /messageSender\.isSending\(\)/);
   assert.match(handler, /await messageSender\.send\(text\)/);
-  assert.match(handler, /if \(result\.status === 'sent'\)/);
+  assert.match(handler, /if \(result\.status === 'sent' && result\.data\?\.id\)/);
   assert.match(handler, /setNewMessage\(current => current === draft \? '' : current\)/);
   assert.doesNotMatch(handler, /setNewMessage\(''\)/, 'viewer draft must survive failed inserts');
   assert.match(handler, /finally\s*\{\s*setSending\(false\)/);
@@ -46,4 +46,17 @@ test('viewer retains its draft until confirmed and does not block on thrown netw
 test('replayed realtime stream messages cannot duplicate the same server message', () => {
   assert.match(viewer, /prev\.some\(m => m\.id === newMsg\.id\)/);
   assert.match(broadcaster, /withoutOptimistic\.some\(m => m\.id === newMsg\.id\)/);
+});
+
+
+test('viewer replaces acknowledged optimistic ID with persisted stream_chat row', () => {
+  assert.match(viewer, /createCallMessageSender<ChatMessage>\(async \(message: string\)/);
+  assert.match(viewer, /\.select\('id, stream_id, user_id, username, message, created_at'\)\s*\.single\(\)/,
+    'viewer must request the inserted row to obtain a real server ID');
+  assert.match(viewer, /!data\?\.id \? new Error\('Missing persisted stream_chat ID'\)/,
+    'a successful response without a persisted ID cannot confirm delivery');
+  assert.match(viewer, /acknowledgeStreamChatMessage\(\s*current, localId, result\.data!, MESSAGES_LIMIT/,
+    'successful send must replace its temporary bubble with the server row');
+  assert.match(viewer, /newMsg\.user_id === currentMyUserId\) return/,
+    'own Realtime inserts are intentionally reconciled via the returned server ID');
 });
