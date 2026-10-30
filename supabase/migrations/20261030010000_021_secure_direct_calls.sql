@@ -4,6 +4,12 @@ ALTER TABLE public.matches
   ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'random';
 
 ALTER TABLE public.matches
+  ADD COLUMN IF NOT EXISTS call_type text NOT NULL DEFAULT 'video';
+ALTER TABLE public.matches
+  ADD CONSTRAINT matches_call_type_check
+  CHECK (call_type IN ('video', 'audio'));
+
+ALTER TABLE public.matches
   DROP CONSTRAINT IF EXISTS matches_status_check;
 ALTER TABLE public.matches
   ADD CONSTRAINT matches_status_check
@@ -41,7 +47,7 @@ WITH CHECK (
   AND (user1 = (SELECT auth.uid()) OR user2 = (SELECT auth.uid()))
 );
 
-CREATE OR REPLACE FUNCTION public.create_direct_call(p_callee uuid)
+CREATE OR REPLACE FUNCTION public.create_direct_call(p_callee uuid, p_type text DEFAULT 'video')
 RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -51,7 +57,7 @@ DECLARE
   v_caller uuid := auth.uid();
   v_match_id uuid;
 BEGIN
-  IF v_caller IS NULL OR p_callee IS NULL OR p_callee = v_caller THEN
+  IF v_caller IS NULL OR p_callee IS NULL OR p_callee = v_caller OR p_type IS NULL OR p_type NOT IN ('audio', 'video') THEN
     RAISE EXCEPTION 'Unauthorized direct call';
   END IF;
 
@@ -97,8 +103,8 @@ BEGIN
     RAISE EXCEPTION 'A participant is already in a call';
   END IF;
 
-  INSERT INTO public.matches (user1, user2, kind, status)
-  VALUES (v_caller, p_callee, 'direct', 'pending')
+  INSERT INTO public.matches (user1, user2, kind, status, call_type)
+  VALUES (v_caller, p_callee, 'direct', 'pending', p_type)
   RETURNING id INTO v_match_id;
 
   RETURN v_match_id;
@@ -131,7 +137,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.create_direct_call(uuid) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.create_direct_call(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.create_direct_call(uuid,text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_direct_call(uuid,text) TO authenticated;
 REVOKE ALL ON FUNCTION public.respond_direct_call(uuid,boolean) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.respond_direct_call(uuid,boolean) TO authenticated;
