@@ -1,10 +1,7 @@
 -- Only for disposable PostgreSQL CI instances.
 -- Run AFTER gift_prices_setup.sql; reuse its real wallet and gift tables
 -- so Stripe credits and gifts share the same coin ledger.
-CREATE ROLE anon NOLOGIN;
-CREATE ROLE authenticated NOLOGIN;
-CREATE ROLE service_role NOLOGIN;
-
+-- API roles are provisioned by gift_prices_setup.sql.
 ALTER TABLE public.users_coins
   ADD CONSTRAINT integration_coins_user_fkey
   FOREIGN KEY (user_id) REFERENCES auth.users(id);
