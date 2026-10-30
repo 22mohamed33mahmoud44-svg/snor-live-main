@@ -35,5 +35,5 @@ BEGIN
       RAISE EXCEPTION 'Trusted service_role leaderboard reader lost access: %', v_table;
     END IF;
   END LOOP;
-END
+END;
 $verify_leaderboard_access$;
