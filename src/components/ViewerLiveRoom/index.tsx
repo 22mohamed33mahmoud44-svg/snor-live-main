@@ -59,6 +59,8 @@ type RealtimeChatMessage = {
 
 
 const MESSAGES_LIMIT = 30;
+const VIEWER_TOKEN_TIMEOUT_MS = 20_000;
+const VIEWER_MEDIA_TIMEOUT_MS = 30_000;
 const HEART_EMOJIS = ['💖', '🔥', '✨', '❤️', '😍'];
 
 export default function ViewerLiveRoom({
@@ -93,6 +95,10 @@ export default function ViewerLiveRoom({
 
   // 🔑 حالة توكن LiveKit الجديد
   const [liveKitToken, setLiveKitToken] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [mediaConnected, setMediaConnected] = useState(false);
+  const suppressDisconnectRef = useRef(false);
 
   // مراجع لتحسين الأداء (Ref)
   const roomChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -118,9 +124,18 @@ export default function ViewerLiveRoom({
     safeTimeout(() => setToast(null), 2500);
   }, [safeTimeout]);
 
-  // 🚀 تأثير جلب توكن LiveKit من الـ Edge Function تلقائياً
+  // A token failure must not leave the viewer on an endless spinner.
+  // Old requests are ignored if the viewer retries or changes streams.
   useEffect(() => {
     let isCancelled = false;
+    setLiveKitToken(null);
+    setMediaConnected(false);
+    setConnectionError(null);
+
+    const tokenTimeout = window.setTimeout(() => {
+      isCancelled = true;
+      setConnectionError('انتهت مهلة تجهيز البث. تأكد من الإنترنت وأعد المحاولة.');
+    }, VIEWER_TOKEN_TIMEOUT_MS);
 
     async function fetchLiveKitToken() {
       try {
@@ -128,32 +143,66 @@ export default function ViewerLiveRoom({
           body: {
             room: streamId,
             username: myUsername || 'متابع',
-            isStreamer: false
-          }
+            isStreamer: false,
+          },
         });
-
         if (isCancelled) return;
-
-        if (funcError) throw funcError;
-        if (data && data.token) {
-          setLiveKitToken(data.token);
-        } else {
-          throw new Error('تعذر استلام مفتاح الاتصال بالبث');
+        if (funcError || !data?.token) {
+          throw funcError ?? new Error('No live stream token returned');
         }
-      } catch (err: unknown) {
-        if (!isCancelled) {
-          console.error('LiveKit Token Fetch Error:', err);
-          showToast(err instanceof Error ? err.message : 'فشل الاتصال بسيرفر البث الرئيسي');
-        }
+        setLiveKitToken(data.token);
+      } catch (error) {
+        if (isCancelled) return;
+        console.error('LiveKit viewer token request failed:', error);
+        setConnectionError('تعذر تجهيز اتصال البث. تأكد من الإنترنت وأعد المحاولة.');
+      } finally {
+        window.clearTimeout(tokenTimeout);
       }
     }
 
-    fetchLiveKitToken();
-
+    void fetchLiveKitToken();
     return () => {
       isCancelled = true;
+      window.clearTimeout(tokenTimeout);
     };
-  }, [streamId, myUsername, showToast]);
+  }, [streamId, myUsername, connectionAttempt]);
+
+  const handleMediaConnected = useCallback(() => {
+    suppressDisconnectRef.current = false;
+    setMediaConnected(true);
+    setConnectionError(null);
+  }, []);
+
+  const handleMediaError = useCallback((error: Error) => {
+    console.error('LiveKit viewer connection failed:', error);
+    if (!suppressDisconnectRef.current) {
+      setConnectionError('تعذر الاتصال بخادم البث. حاول إعادة الاتصال.');
+    }
+  }, []);
+
+  const handleMediaDisconnected = useCallback(() => {
+    if (!suppressDisconnectRef.current) {
+      setMediaConnected(false);
+      setConnectionError('انقطع الاتصال بالبث. حاول إعادة الاتصال.');
+    }
+  }, []);
+
+  // Catch silent room-connection stalls that emit no error event.
+  useEffect(() => {
+    if (!liveKitToken || mediaConnected || connectionError) return;
+    const timeout = window.setTimeout(() => {
+      setConnectionError('تأخر الاتصال بالبث. جرّب إعادة الاتصال.');
+    }, VIEWER_MEDIA_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [liveKitToken, mediaConnected, connectionError]);
+
+  const retryConnection = useCallback(() => {
+    suppressDisconnectRef.current = true;
+    setConnectionError(null);
+    setMediaConnected(false);
+    setLiveKitToken(null);
+    setConnectionAttempt(attempt => attempt + 1);
+  }, []);
 
   const spawnHeart = useCallback((clientX?: number, emoji?: string) => {
     const heart: FloatingHeart = {
@@ -440,8 +489,29 @@ export default function ViewerLiveRoom({
         {/* 📺 طبقة مشغل البث والتفاعل */}
         {/* تم إضافة WebkitTapHighlightColor لمنع ظهور المربع الأزرق المزعج عند النقر المستمر على الموبايل */}
         <div onClick={handleScreenTap} style={{ position: 'absolute', inset: 0, zIndex: 1, cursor: 'pointer', background: '#000', WebkitTapHighlightColor: 'transparent' }}>
-          {liveKitToken ? (
+          {connectionError ? (
+            <div
+              role="alert"
+              onClick={e => e.stopPropagation()}
+              style={{
+                height: '100%', display: 'flex', flexDirection: 'column',
+                justifyContent: 'center', alignItems: 'center', gap: 16,
+                padding: 24, textAlign: 'center', color: '#fff',
+                background: 'linear-gradient(to bottom, #110e26, #03030a)',
+              }}
+            >
+              <Users size={46} style={{ color: '#fca5a5' }} />
+              <strong style={{ fontSize: '1.1rem' }}>تعذر تشغيل البث</strong>
+              <p style={{ color: '#e2e8f0', fontSize: '.85rem', margin: 0 }}>{connectionError}</p>
+              <button type="button" onClick={retryConnection} style={{ padding: '12px 22px', borderRadius: 12, background: '#0e7490', color: '#fff', border: 0, fontWeight: 700, cursor: 'pointer' }}>إعادة الاتصال</button>
+              <button type="button" onClick={onExit} style={{ padding: '10px 20px', borderRadius: 12, color: '#e2e8f0', background: 'rgba(255,255,255,.12)', border: 0, cursor: 'pointer' }}>الرجوع</button>
+            </div>
+          ) : liveKitToken ? (
             <LiveKitRoom
+              key={`${streamId}-${connectionAttempt}`}
+              onConnected={handleMediaConnected}
+              onDisconnected={handleMediaDisconnected}
+              onError={handleMediaError}
               video={false}
               // Viewers subscribe to broadcaster tracks; they must never
               // request/publish microphone or camera tracks themselves.
