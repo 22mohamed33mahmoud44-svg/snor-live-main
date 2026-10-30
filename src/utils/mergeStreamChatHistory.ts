@@ -29,3 +29,26 @@ export function mergeStreamChatHistory<T extends {
   if (limit <= 0) return [];
   return ordered.slice(-Math.floor(limit));
 }
+
+
+/**
+ * Replace an optimistic outgoing chat bubble with the row acknowledged by
+ * PostgreSQL. If a Realtime/history refresh already supplied the same server
+ * ID, deduplicate it. Do not remove any unrelated message sent while awaiting
+ * the insert response.
+ */
+export function acknowledgeStreamChatMessage<T extends {
+  id: string;
+  created_at?: string | null;
+}>(
+  current: readonly T[],
+  pendingId: string,
+  saved: T,
+  limit = 30,
+): T[] {
+  return mergeStreamChatHistory(
+    [saved],
+    current.filter(message => message.id !== pendingId && message.id !== saved.id),
+    limit,
+  );
+}
