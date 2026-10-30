@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@12.0.0?target=deno";
-import { parseCheckoutPackage, resolveCheckoutPrice } from "./checkout-validation.mjs";
+import { buildCheckoutRedirects, parseCheckoutPackage, resolveCheckoutPrice } from "./checkout-validation.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -83,13 +83,15 @@ Deno.serve(async (req) => {
       );
     }
 
+    const { successUrl, cancelUrl } = buildCheckoutRedirects(appUrl);
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
       metadata: { user_id: user.id, package_id: packageId },
-      success_url: `${appUrl}/coins?success=true`,
-      cancel_url: `${appUrl}/coins?cancelled=true`,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
     });
 
     return new Response(
