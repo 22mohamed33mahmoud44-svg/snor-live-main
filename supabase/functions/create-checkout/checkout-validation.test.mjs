@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PACKAGE_IDS, parseCheckoutPackage, resolveCheckoutPrice } from './checkout-validation.mjs';
+import { PACKAGE_IDS, buildCheckoutRedirects, parseCheckoutPackage, resolveCheckoutPrice } from './checkout-validation.mjs';
 
 const prices = Object.freeze({
   pkg_100: 'price_test_100',
@@ -37,4 +37,27 @@ test('requires explicitly configured non-empty Stripe prices', () => {
   assert.equal(resolveCheckoutPrice('pkg_100', {pkg_100: '  '}), null);
   const proto = {pkg_100: 'inherited_price'};
   assert.equal(resolveCheckoutPrice('pkg_100', Object.create(proto)), null);
+});
+
+test('returns users to the session-specific, ledger-verified payment route', () => {
+  assert.deepEqual(buildCheckoutRedirects('https://example.com/'), {
+    successUrl: 'https://example.com/payment/success?session_id={CHECKOUT_SESSION_ID}',
+    cancelUrl: 'https://example.com/?payment=cancelled',
+  });
+  assert.equal(
+    buildCheckoutRedirects('https://example.com/some-path').successUrl.includes('%7B'),
+    false,
+    'Stripe substitution placeholder must not be URL-encoded',
+  );
+});
+
+test('rejects untrusted or invalid configured app origins', () => {
+  for (const base of ['javascript:alert(1)', 'http://public.example.com',
+    'ftp://example.com', 'https://user:password@example.com']) {
+    assert.throws(() => buildCheckoutRedirects(base));
+  }
+  assert.equal(
+    buildCheckoutRedirects('http://localhost:5173').cancelUrl,
+    'http://localhost:5173/?payment=cancelled',
+  );
 });
