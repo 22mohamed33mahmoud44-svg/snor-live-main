@@ -5,7 +5,7 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
  * Lookups must throw on database errors so access always fails closed.
  * @param {string} room
  * @param {string} userId
- * @param {(roomId: string) => Promise<{user1:string,user2:string,status:string}|null>} lookupMatch
+ * @param {(roomId: string) => Promise<{user1:string,user2:string,status:string,kind?:string,call_type?:string}|null>} lookupMatch
  * @param {(roomId: string) => Promise<{user_id:string,is_live:boolean}|null>} lookupStream
  */
 export async function authorizeRoom(room, userId, lookupMatch, lookupStream) {
@@ -17,6 +17,18 @@ export async function authorizeRoom(room, userId, lookupMatch, lookupStream) {
   if (match) {
     const participant = match.user1 === userId || match.user2 === userId;
     if (!participant || match.status !== 'active') return denied;
+
+    // Clients cannot override the database-selected media mode. In particular,
+    // an accepted audio call may only publish a microphone track to LiveKit.
+    if (match.kind === 'direct') {
+      if (match.call_type === 'audio') {
+        return {
+          authorized: true, canPublish: true, kind: 'match',
+          publishSources: ['microphone'],
+        };
+      }
+      if (match.call_type !== 'video') return denied;
+    }
     return { authorized: true, canPublish: true, kind: 'match' };
   }
 
