@@ -53,6 +53,9 @@ jobs:
       - name: Check broadcaster token and publishing recovery
         run: node --test tests/unit/broadcasterConnectionRecovery.test.mjs
 
+      - name: Prevent duplicate livestream creation and camera leaks in studio
+        run: node --test tests/unit/liveStreamLaunchWiring.test.mjs
+
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
@@ -494,6 +497,9 @@ jobs:
 
       - name: Prevent phantom live streams when end calls fail
         run: deno test tests/unit/endLiveStreamOnServer.test.ts
+
+      - name: Serialize stream launch requests and retry after failed writes
+        run: deno test tests/unit/streamLaunchGate.test.ts
 
       - name: Keep call-chat drafts on failed message sends
         run: deno test tests/unit/callMessageSender.test.ts
