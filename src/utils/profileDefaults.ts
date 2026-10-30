@@ -1,6 +1,20 @@
 // Build mandatory insert values for the actual app_private.profiles schema.
 // Username and avatar_url are NOT NULL even when the onboarding screen does
 // not collect a username and makes the profile photograph optional.
+// A skipped optional photo must not erase an existing avatar during a
+// partial-profile onboarding update. New inserts get avatar_url='' below.
+export function onboardingProfileChanges(
+  fields: { birthdate: string; gender: string; lookingFor: string },
+  uploadedAvatarUrl: string | null,
+) {
+  return {
+    gender: fields.gender,
+    birthdate: fields.birthdate,
+    looking_for: fields.lookingFor,
+    ...(uploadedAvatarUrl ? { avatar_url: uploadedAvatarUrl } : {}),
+  };
+}
+
 export type NewProfileInput = {
   username?: string;
   gender?: string;
