@@ -44,8 +44,8 @@ BEGIN
 
   -- A malicious signed-in client cannot insert another user's profile.
   BEGIN
-    INSERT INTO public.profiles(id,username) VALUES
-      ('33333333-3333-4333-8333-333333333333','forged');
+    INSERT INTO public.profiles(id,username,gender,birthdate,avatar_url) VALUES
+      ('33333333-3333-4333-8333-333333333333','forged','male',DATE '2000-01-01','');
     RAISE EXCEPTION 'Profile INSERT check bypassed';
   EXCEPTION
     WHEN with_check_option_violation THEN NULL;
