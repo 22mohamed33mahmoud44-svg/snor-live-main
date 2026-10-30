@@ -36,10 +36,10 @@ test('reconnection and publish failure are actionable, without stale room reuse'
 
 test('broadcaster can end a stream safely when media never becomes available', () => {
   assert.match(room, /\{!mediaPublished && \(/);
-  assert.match(room, /role=\{liveKitError \? 'alert' : 'status'\}/);
+  assert.match(room, /role=\{broadcastProblem \? 'alert' : 'status'\}/);
   assert.match(room, /onClick=\{retryMediaConnection\}/);
   assert.match(room, /onClick=\{\(\) => setShowEndModal\(true\)\}/);
-  assert.match(room, /if \(liveKitToken && !liveKitError\)/);
+  assert.match(room, /if \(liveKitToken && !broadcastProblem\)/);
   assert.match(room, /<LiveKitRoom[\s\S]*video=\{false\}[\s\S]*audio=\{false\}/);
   assert.match(room, /<StreamPublisher[\s\S]*onPublished=\{handleMediaPublished\}/);
 });
