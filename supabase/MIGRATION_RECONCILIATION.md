@@ -15,7 +15,7 @@ The first four timestamped versions are present in both Production and the repos
 
 Production then has a separate security/repair chain starting at `20260822011814` and ending at `20260822205256` (31 additional production migrations), followed by a Stripe payment migration on 2026-09-08 (one more production migration).
 
-Production also contains **`20260908221940` — `019_stripe_only_payments`**, which is absent from `main`. It must be recovered or otherwise reconciled before replaying migration history.
+Production also contains **`20260908221940` — `019_stripe_only_payments`**, absent from `main`. Its original SQL has now been archived, but it still requires migration reconciliation before release.
 
 The repository instead has timestamped migrations from `20260820000000` through `20260901000000` for the feature/phase work in the current codebase.
 
@@ -27,7 +27,7 @@ The repository must **not** attempt to replay the full migration history against
 
 ## Production-only chain that must be preserved
 
-The following versions are currently recorded in Production but are not represented by same-version files on `main`:
+The following 32 versions are recorded in Production and now **recovered verbatim** under `supabase/production_history/`. They are still **not in the active migration directory** on `main`:
 
 ```text
 20260822011814 harden_security_and_fix_schema_20260822
@@ -70,10 +70,16 @@ Git history contains the original Migration 017/018 work around 2026-08-22. The 
 
 The current `20260901000000_018_storage_avatars.sql` is the later storage migration in the active branch and should not be assumed equivalent to Production migration `20260822205256` without a schema-level comparison.
 
+## Verified original production SQL archive (2026-10-30)
+
+All 32 production-only migration statement bodies were recovered via **read-only** SQL from `supabase_migrations.schema_migrations.statements` and committed to [`supabase/production_history/`](./production_history/) on integration PR #16. Their `manifest.json` contains database-calculated MD5 and character length, and CI checks these values via `scripts/check-production-history.mjs`. Three sampled bodies (September 8 Stripe, private RPC migration, and FK index) were independently compared character for character with the source database following the archive commit.
+
+**Do not move these files into `supabase/migrations` or apply them to Production.** The history is still divergent and requires staged reconciliation. Recovery removes the missing SQL source blocker, **not** the unsafe deployment/migration drift blocker.
+
 ## Safe reconciliation procedure
 
 1. Treat Production schema and migration history as the operational source of truth.
-2. Recover the exact SQL for Production-only migrations from Git history, backups, or the original deployment source when available.
+2. Use the recovered SQL in `supabase/production_history/` for source comparison and cross-check against trusted backups or prior Git history. Do not move archived files into active migrations without an approved reconciliation plan.
 3. Compare those SQL changes with the current repository migrations and the live schema.
 4. Do not create fake/empty migration files for Production-only versions.
 5. Do not reset Production to repair migration history.
@@ -84,7 +90,7 @@ The current `20260901000000_018_storage_avatars.sql` is the later storage migrat
 
 **Migration status: DRIFTED / NOT REPRODUCIBLE FROM CURRENT `main`.**
 
-Production is ahead of the checked-in repository and contains a security hardening chain whose exact SQL is not currently represented by same-version migration files on `main`.
+Production is ahead of the checked-in `main` migration directory. Its production-only SQL has now been recovered as archival reference; it has **not** been reconciled into the executable migration chain or tested alongside the divergent repo chain.
 
 This document records the mismatch so future deploy tooling does not try to replay the current repository chain blindly against Production.
 
