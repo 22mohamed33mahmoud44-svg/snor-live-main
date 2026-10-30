@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@12.0.0?target=deno";
+import { parseCheckoutPackage, resolveCheckoutPrice } from "./checkout-validation.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -22,6 +23,12 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
+      status: 405,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
 
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
@@ -39,17 +46,30 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { packageId } = await req.json();
-    const priceId = PRICE_IDS[packageId];
+    let payload: unknown;
+    try {
+      payload = await req.json();
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
+    const packageId = parseCheckoutPackage(payload);
+    if (!packageId) {
+      return new Response(JSON.stringify({ error: "Invalid coin package" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const priceId = resolveCheckoutPrice(packageId, PRICE_IDS);
     if (!priceId) {
-      return new Response(
-        JSON.stringify({ error: "Stripe price is not configured for this package" }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
+      console.error("Missing configured Stripe price for package", packageId);
+      return new Response(JSON.stringify({ error: "Checkout package temporarily unavailable" }), {
+        status: 503,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const appUrl = Deno.env.get("APP_URL");
@@ -80,7 +100,7 @@ Deno.serve(async (req) => {
     console.error("create-checkout error:", error);
     return new Response(
       JSON.stringify({
-        error: error instanceof Error ? error.message : "Internal Server Error",
+        error: "Checkout temporarily unavailable",
       }),
       {
         status: 500,
