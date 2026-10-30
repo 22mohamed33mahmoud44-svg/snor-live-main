@@ -278,6 +278,7 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/full_financial_chain_setup.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030000000_020_atomic_stripe_checkout_credit.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql
+          psql -X -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION app_private.send_gift_safe(uuid,uuid,text,integer) TO authenticated"
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030040000_024_restrict_anonymous_rpc_execute.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030060000_026_lock_financial_table_writes.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/combined_wallet_assertions.sql
