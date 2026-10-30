@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../supabase';
 import { saveOwnProfile } from '../utils/saveOwnProfile';
 import { requiresOnboarding } from '../utils/profileGate';
+import { isAdultBirthdate } from '../utils/ageEligibility';
 
 export interface OnboardingData {
   birthdate: string;
@@ -55,6 +56,11 @@ export function useAuth() {
   }, []);
 
   const handleOnboardingComplete = async (data: OnboardingData, userId: string) => {
+    if (!isAdultBirthdate(data.birthdate) || !data.gender || !data.lookingFor) {
+      setProfileError('تأكد من صحة تاريخ الميلاد وأن عمرك 18 سنة أو أكثر، وأكمل باقي البيانات.');
+      return;
+    }
+
     let avatarUrl: string | null = null;
 
     if (data.profileImage) {
