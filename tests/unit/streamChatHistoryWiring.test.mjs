@@ -7,7 +7,7 @@ const broadcaster = readFileSync(new URL('../../src/components/ActiveLiveRoom.ts
 
 test('viewer and broadcaster fetch newest history and merge with already arrived messages', () => {
   for (const [who, source] of [['viewer', viewer], ['broadcaster', broadcaster]]) {
-    assert.match(source, /import \{ mergeStreamChatHistory \} from /, `${who} missing merge utility`);
+    assert.match(source, /import \{[^}]*\bmergeStreamChatHistory\b[^}]*\} from /, `${who} missing merge utility`);
     assert.match(source,
       /\.from\('stream_chat'\)[\s\S]*?\.order\('created_at', \{ ascending: false \}\)\s*\.limit\(MESSAGES_LIMIT\)/,
       `${who} should request latest messages rather than the oldest`);
