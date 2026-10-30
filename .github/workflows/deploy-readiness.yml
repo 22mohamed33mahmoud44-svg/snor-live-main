@@ -32,6 +32,9 @@ jobs:
       - name: Test LiveKit authorization rules
         run: node --test supabase/functions/livekit-token/authorization.test.mjs
 
+      - name: Test Stripe checkout input rules
+        run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
+
       - name: Verify deploy/database readiness
         run: node scripts/verify-deploy-readiness.mjs
 
