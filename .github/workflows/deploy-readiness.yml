@@ -293,6 +293,9 @@ jobs:
       - name: Test signup confirmation and authenticated session routing
         run: deno test tests/unit/emailAuthOutcome.test.ts
 
+      - name: Ensure unsafe Vercel previews cannot initialize the application
+        run: deno test tests/unit/previewSafety.test.ts
+
       - name: Test new-account profile field requirements
         run: deno test tests/unit/profileDefaults.test.ts
 
