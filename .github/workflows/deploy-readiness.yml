@@ -47,6 +47,9 @@ jobs:
       - name: Check broadcaster and viewer chat draft safety
         run: node --test tests/unit/liveStreamChatWiring.test.mjs
 
+      - name: Preserve latest live stream chat during historical message fetches
+        run: node --test tests/unit/streamChatHistoryWiring.test.mjs
+
       - name: Prevent indefinite viewer stream connection loading
         run: node --test tests/unit/viewerStreamConnectionWiring.test.mjs
 
@@ -561,6 +564,9 @@ jobs:
 
       - name: Keep call-chat drafts on failed message sends
         run: deno test tests/unit/callMessageSender.test.ts
+
+      - name: Merge history with new and pending live stream chat safely
+        run: deno test tests/unit/mergeStreamChatHistory.test.ts
 
       - name: Check signed LiveKit token media permissions
         run: deno test --allow-env --no-lock --node-modules-dir=auto supabase/functions/livekit-token/token-grants.test.mjs
