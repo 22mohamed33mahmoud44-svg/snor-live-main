@@ -103,6 +103,18 @@ The following independent draft PRs contain proposed changes **not yet applied**
 
 **Do not merge all PR branches independently and assume the result is deployable.** #10 and #12 both modify the `src/Dashboard.tsx` and `supabase/functions/livekit-token/index.ts` paths. Integration must resolve those overlaps and rerun every SQL test on one combined candidate.
 
+### Stripe ledger type blocker confirmed in Production (2026-10-30)
+
+A read-only production schema audit established a release-blocking mismatch:
+
+- `public.add_coins(uuid,integer,jsonb)` writes `public.transactions.type = 'buy'` for Stripe coin purchases.
+- The **validated production** `transactions_type_check` only allows `spend`, `earn`, `bonus`, or `refund` — it excludes `buy`. The separate amount-direction check *does* already allow positive `buy`.
+- Consequently, the current production `add_coins` purchase path cannot commit its buy ledger entry. Since the RPC is transactional, any credit should roll back; this must not be mistaken for a Stripe payment failure.
+- Integration PR #16 now expands **only** the known, existing transaction-type constraint in `20261030000000_020_atomic_stripe_checkout_credit.sql` before creating the atomic checkout RPC. The SQL fails closed on an unknown constraint definition rather than blindly removing enforcement.
+- Both the isolated checkout test and the combined Stripe-funded gifts test reproduce the original 4-type constraint, then apply the proposed migration and require valid `buy` ledger entries. The live schema check `supabase/release/preflight_readonly.sql` reports this missing capability as `PENDING`.
+
+**Release order:** after migration reconciliation, back up/verify the ledger schema, rehearse the scoped constraint change on a schema-compatible staging clone, apply the Stripe SQL before deploying `stripe-webhook`, and confirm a Stripe test-mode checkout creates exactly one `buy` ledger row. Do not repair Stripe errors by writing coin balances directly or removing transaction constraints altogether.
+
 ### Safe promotion checklist
 
 1. Obtain an off-production database or an isolated schema-compatible clone and establish a reliable schema baseline; do not reset or run `db push` against the live database while histories differ.
