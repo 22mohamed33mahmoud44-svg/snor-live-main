@@ -1,3 +1,4 @@
+/// <reference lib="deno.ns" />
 import { newProfileRequiredFields } from './profileDefaults.ts';
 
 const id = '11111111-1111-4111-8111-111111111111';
