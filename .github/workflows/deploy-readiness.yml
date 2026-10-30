@@ -239,6 +239,45 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030040000_024_restrict_anonymous_rpc_execute.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/anon_rpc_assertions.sql
 
+  migration-chain-rpc-tests:
+    name: Test real _022 then _024 migration order on one PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Apply real gift migration before RPC security migration
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/gift_prices_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/cross_migration_rpc_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030040000_024_restrict_anonymous_rpc_execute.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/cross_migration_rpc_assertions.sql
+
   leaderboard-database-tests:
     name: Test materialized view grants on disposable PostgreSQL 17
     runs-on: ubuntu-latest
