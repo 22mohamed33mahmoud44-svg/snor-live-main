@@ -76,6 +76,24 @@ All 32 production-only migration statement bodies were recovered via **read-only
 
 **Do not move these files into `supabase/migrations` or apply them to Production.** The history is still divergent and requires staged reconciliation. Recovery removes the missing SQL source blocker, **not** the unsafe deployment/migration drift blocker.
 
+## Verified cross-migration ordering dependency (_022 before _024)
+
+A live-schema read-only audit found **28** eligible `SECURITY DEFINER`
+user-specific public RPC functions before the new migrations. However,
+`20261030020000_022_validate_gift_catalog_prices.sql` changes
+`public.send_stream_gift(uuid,uuid,text,integer)` to
+`SECURITY INVOKER` for owner/price validation. Consequently, the
+`_024` anonymous-RPC hardening loop must match **27**, not 28, after
+`_022` has run. Previously each isolated SQL test passed but running
+`_022` followed by `_024` would abort the migration chain.
+
+`_024` now rejects a missing or still-`SECURITY DEFINER` stream wrapper,
+verifies that it remains authenticated-only, and checks exactly 27
+remaining privileged DEFINER RPCs. The disposable PostgreSQL 17 fixture
+models the post-`_022` state, and tests this ordering assumption;
+the reviewed source patch stays byte-identical to the executable `_024`
+migration. These changes **have not** been applied to production.
+
 ## Security hardening is now in the active migration chain (2026-10-30)
 
 The three security patches previously stored **only** under
