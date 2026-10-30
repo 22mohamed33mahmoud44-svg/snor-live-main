@@ -1,5 +1,5 @@
 /// <reference lib="deno.ns" />
-import { newProfileRequiredFields } from '../../src/utils/profileDefaults.ts';
+import { newProfileRequiredFields, onboardingProfileChanges } from '../../src/utils/profileDefaults.ts';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const other = '22222222-2222-4222-8222-222222222222';
@@ -24,6 +24,17 @@ Deno.test('explicit names and uploaded avatars are preserved', () => {
   assert(r.username === 'sara', 'Explicit name must be used');
   assert(r.avatar_url === 'https://example.org/avatar.jpg', 'Uploaded avatar lost');
 });
+Deno.test('skipping a photo preserves an existing avatar but still creates a valid new profile', () => {
+  const details = { gender: 'female', birthdate: '2000-01-01', lookingFor: 'male' };
+  const changes = onboardingProfileChanges(details, null);
+  assert(!Object.hasOwn(changes, 'avatar_url'), 'skipping must not clear an existing avatar');
+  const newProfile = newProfileRequiredFields(id, changes);
+  assert(newProfile.avatar_url === '', 'a new account still needs its non-null avatar default');
+  const newAvatar = onboardingProfileChanges(details, 'https://example.org/new.png');
+  assert('avatar_url' in newAvatar && newAvatar.avatar_url === 'https://example.org/new.png',
+    'explicit new photo must replace the existing avatar');
+});
+
 Deno.test('invalid identities, missing required attributes and oversized names fail closed', () => {
   const expectThrows = (fn: () => unknown) => {
     let rejected = false;
