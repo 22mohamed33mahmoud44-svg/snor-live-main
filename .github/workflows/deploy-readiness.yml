@@ -56,6 +56,9 @@ jobs:
       - name: Prevent duplicate livestream creation and camera leaks in studio
         run: node --test tests/unit/liveStreamLaunchWiring.test.mjs
 
+      - name: Ensure closing matchmaking cancels pending start and any late random match
+        run: node --test tests/unit/randomMatchUnmountWiring.test.mjs
+
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
