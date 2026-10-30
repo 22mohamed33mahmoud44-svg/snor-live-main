@@ -157,7 +157,8 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       pendingStartRef.current = startMatching(userId);
       const result = await pendingStartRef.current;
 
-      if (phaseRef.current !== 'waiting') return;
+      // Ref state may change across awaited calls, despite TS control-flow narrowing.
+      if ((phaseRef.current as string) !== 'waiting') return;
       if (result.status === 'matched' && result.match) {
         handleMatchFound(result.match);
         return;
@@ -166,7 +167,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       // فحص فوري بعد إضافة المستخدم لقائمة الانتظار.
       await checkExistingMatch();
     } catch (error) {
-      if (phaseRef.current === 'waiting') {
+      if ((phaseRef.current as string) === 'waiting') {
         console.error('Random matching failed:', error);
         stopSearchResources();
         void cancelMatching(userId).catch(() => {});
