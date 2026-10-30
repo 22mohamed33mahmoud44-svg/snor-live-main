@@ -2,6 +2,7 @@ import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { supabase } from './supabase';
 import { endMatchOnServer } from './utils/endMatchOnServer';
+import { streamLaunchErrorMessage } from './utils/streamLaunchError';
 import { createPortal } from 'react-dom';
 
 // ── Components ──────────────────────────────────────────────────
@@ -46,6 +47,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
 
   // 🆕 البث المباشر
   const [showLiveStudio, setShowLiveStudio] = useState(false);
+  const [liveLaunchFailure, setLiveLaunchFailure] = useState<string | null>(null);
   const [activeLiveStream, setActiveLiveStream] = useState<{ id: string, title: string; filterId: string; stream?: MediaStream | null } | null>(null);
   const liveLaunchPendingRef = useRef(false);
 
@@ -258,6 +260,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     // if more than one caller tries to create a live_streams row.
     if (liveLaunchPendingRef.current || activeLiveStream || !stream || !stream.getTracks().length) return false;
     liveLaunchPendingRef.current = true;
+    setLiveLaunchFailure(null);
     try {
       const { data, error } = await supabase
         .from('live_streams')
@@ -272,6 +275,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
 
       if (error || !data?.id) {
         console.error('تعذر تسجيل البث:', error ?? 'No stream ID returned');
+        setLiveLaunchFailure(streamLaunchErrorMessage(error));
         return false;
       }
 
@@ -280,6 +284,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       return true;
     } catch (error) {
       console.error('فشل إنشاء البث:', error);
+      setLiveLaunchFailure(streamLaunchErrorMessage(null));
       return false;
     } finally {
       liveLaunchPendingRef.current = false;
@@ -313,7 +318,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     );
   }
   
-  if (showLiveStudio) return <><LiveStreamStudio onClose={() => setShowLiveStudio(false)} onStart={handleLaunchLiveStream} />{callOverlay}</>;
+  if (showLiveStudio) return <><LiveStreamStudio launchFailure={liveLaunchFailure} onClose={() => { setLiveLaunchFailure(null); setShowLiveStudio(false); }} onStart={handleLaunchLiveStream} />{callOverlay}</>;
 
   // ── Render ────────────────────────────────────────────────────
   return (
