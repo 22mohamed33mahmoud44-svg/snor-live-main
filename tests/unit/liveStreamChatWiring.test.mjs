@@ -33,7 +33,7 @@ test('viewer retains its draft until confirmed and does not block on thrown netw
   const end = viewer.indexOf('  // 🚀 دالة الإعجاب', start);
   assert.ok(start >= 0 && end > start);
   const handler = viewer.slice(start, end);
-  assert.match(viewer, /createCallMessageSender\(async \(message: string\)/);
+  assert.match(viewer, /createCallMessageSender<ChatMessage>\(async \(message: string\)/);
   assert.match(handler, /messageSender\.isSending\(\)/);
   assert.match(handler, /await messageSender\.send\(text\)/);
   assert.match(handler, /if \(result\.status === 'sent' && result\.data\?\.id\)/);
