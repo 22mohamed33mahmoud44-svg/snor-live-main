@@ -162,6 +162,34 @@ BEGIN
 END;
 $$;
 
+-- The legacy public.send_stream_gift wrapper previously called send_gift()
+-- directly, then inserted a gift log with an unchecked stream ID/recipient.
+-- Route EVERY stream gift through the catalog-priced and ownership-checked
+-- app_private.send_gift_safe function instead. Preserve the public RPC name
+-- for older clients while enforcing the same security as current clients.
+CREATE OR REPLACE FUNCTION public.send_stream_gift(
+  p_stream_id uuid,
+  p_receiver_id uuid,
+  p_gift_type text,
+  p_coin_cost integer
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY INVOKER
+SET search_path TO 'pg_catalog'
+AS $secure_stream_gift$
+  SELECT app_private.send_gift_safe(
+    p_stream_id, p_receiver_id, p_gift_type, p_coin_cost
+  );
+$secure_stream_gift$;
+
+-- Anon callers are not allowed to execute privileged wallet transfers.
+-- REVOKE from PUBLIC is necessary even if anon has no explicit grant.
+REVOKE EXECUTE ON FUNCTION public.send_stream_gift(uuid,uuid,text,integer)
+FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.send_stream_gift(uuid,uuid,text,integer)
+TO authenticated, service_role;
+
 -- Paid-show access must use catalog-priced single gifts for bundles.
 CREATE OR REPLACE FUNCTION public.request_show_access(p_show_id uuid, p_gift_type text)
  RETURNS jsonb
