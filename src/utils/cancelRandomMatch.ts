@@ -18,3 +18,26 @@ export async function finishCanceledRandomMatch(
   if (!match.id || match.kind !== 'random' || match.status !== 'active') return false;
   return endMatch(match.id);
 }
+
+
+/**
+ * A pending atomic_match_or_wait call may enqueue the user AFTER a component
+ * unmount. Cancel the queue only once that request has settled, then look for
+ * a random match formed in the meantime and end that specific match.
+ *
+ * The same ordering applies to the Cancel button and unmount cleanup.
+ * A rejected start request still needs a queue cleanup attempt.
+ */
+export async function cancelRandomSearchAfterPending(
+  pendingStart: Promise<unknown> | null,
+  cancelWaiting: () => Promise<void>,
+  findActiveRandomMatch: () => Promise<MatchToCancel | null>,
+  endMatch: (id: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (pendingStart) {
+    await pendingStart.catch(() => {});
+  }
+  await cancelWaiting();
+  const match = await findActiveRandomMatch();
+  return await finishCanceledRandomMatch(match, endMatch);
+}
