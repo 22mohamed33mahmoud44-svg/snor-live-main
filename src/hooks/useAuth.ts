@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../supabase';
+import { saveOwnProfile } from '../utils/saveOwnProfile';
 
 export interface OnboardingData {
   birthdate: string;
@@ -82,19 +83,12 @@ export function useAuth() {
     }
 
     try {
-      const { error } = await supabase.from('profiles').upsert({
-        id: userId,
+      await saveOwnProfile(userId, {
         gender: data.gender,
         birthdate: data.birthdate,
         looking_for: data.lookingFor,
         avatar_url: avatarUrl,
       });
-
-      if (error) {
-        console.error('Profile save failed:', error);
-        setProfileError('تعذر حفظ بيانات ملفك الشخصي. حاول مرة أخرى.');
-        return;
-      }
 
       setProfileError(null);
       setShowOnboarding(false);
