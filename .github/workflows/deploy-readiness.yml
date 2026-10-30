@@ -260,3 +260,20 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/leaderboard_mviews_setup.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_private_leaderboard_materialized_views.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/leaderboard_mviews_assertions.sql
+  edge-functions-typecheck:
+    name: Typecheck Supabase Edge Functions with Deno 2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Typecheck LiveKit token and Stripe functions
+        run: |
+          deno check --no-lock supabase/functions/livekit-token/index.ts
+          deno check --no-lock supabase/functions/stripe-webhook/index.ts
+          deno check --no-lock supabase/functions/create-checkout/index.ts
