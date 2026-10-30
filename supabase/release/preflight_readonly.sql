@@ -27,6 +27,12 @@ WITH baseline(requirement, is_ready, reason) AS (
     ('add_coins RPC',
       to_regprocedure('public.add_coins(uuid,integer,jsonb)') IS NOT NULL,
       'Stripe atomic checkout migration invokes this RPC'),
+    ('Wallet minting is service-role only',
+      to_regprocedure('public.add_coins(uuid,integer,jsonb)') IS NOT NULL
+      AND NOT has_function_privilege('anon','public.add_coins(uuid,integer,jsonb)','EXECUTE')
+      AND NOT has_function_privilege('authenticated','public.add_coins(uuid,integer,jsonb)','EXECUTE')
+      AND has_function_privilege('service_role','public.add_coins(uuid,integer,jsonb)','EXECUTE'),
+      'Never allow a browser JWT to add coins; Stripe webhook is the only crediting route'),
     ('stripe_events table', to_regclass('public.stripe_events') IS NOT NULL,
       'Stripe idempotency migration extends the existing event table'),
     ('gift_types table', to_regclass('public.gift_types') IS NOT NULL,
