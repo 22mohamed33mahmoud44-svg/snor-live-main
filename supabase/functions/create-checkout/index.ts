@@ -89,6 +89,8 @@ Deno.serve(async (req) => {
       mode: "payment",
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
+      // Cross-check purchase owner when processing the signed Stripe webhook.
+      client_reference_id: user.id,
       metadata: { user_id: user.id, package_id: packageId },
       success_url: successUrl,
       cancel_url: cancelUrl,
