@@ -9,7 +9,7 @@ test('viewer and broadcaster fetch newest history and merge with already arrived
   for (const [who, source] of [['viewer', viewer], ['broadcaster', broadcaster]]) {
     assert.match(source, /import \{ mergeStreamChatHistory \} from /, `${who} missing merge utility`);
     assert.match(source,
-      /\.from\('stream_chat'\)[\s\S]*?\.order\('created_at', \{ ascending: false \}\)\.limit\(MESSAGES_LIMIT\)/,
+      /\.from\('stream_chat'\)[\s\S]*?\.order\('created_at', \{ ascending: false \}\)\s*\.limit\(MESSAGES_LIMIT\)/,
       `${who} should request latest messages rather than the oldest`);
     assert.match(source, /data\.slice\(\)\.reverse\(\)\.map\(/,
       `${who} should display the latest window in chronological order`);
