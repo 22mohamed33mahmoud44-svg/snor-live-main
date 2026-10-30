@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { supabase } from '../supabase';
+import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
 import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
@@ -389,7 +390,7 @@ const ChatInputArea = memo(({ onSendMessage }: { onSendMessage: (text: string) =
 });
 
 // ── EndStreamModal ──
-const EndStreamModal = memo(({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) => (
+const EndStreamModal = memo(({ onConfirm, onCancel, pending, error }: { onConfirm: () => void; onCancel: () => void; pending: boolean; error: string | null }) => (
   <div style={{
     position: 'fixed', inset: 0, zIndex: 9999,
     background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)',
@@ -412,9 +413,10 @@ const EndStreamModal = memo(({ onConfirm, onCancel }: { onConfirm: () => void; o
           سيتم قطع الاتصال بجميع المشاهدين
         </p>
       </div>
+      {error && <p role="alert" style={{ color: '#fecaca', fontSize: '0.85rem', textAlign: 'center', margin: 0 }}>{error}</p>}
       <div style={{ display: 'flex', gap: 10 }}>
-        <button onClick={onCancel} style={{ flex: 1, padding: '13px', borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#fff', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'Cairo', sans-serif", touchAction: 'manipulation' }}>تراجع</button>
-        <button onClick={onConfirm} style={{ flex: 1, padding: '13px', borderRadius: '12px', background: 'linear-gradient(135deg, #ef4444, #dc2626)', border: 'none', color: '#fff', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'Cairo', sans-serif", boxShadow: '0 4px 15px rgba(239,68,68,0.35)', touchAction: 'manipulation' }}>إنهاء البث</button>
+        <button disabled={pending} onClick={onCancel} style={{ flex: 1, padding: '13px', borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#fff', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'Cairo', sans-serif", touchAction: 'manipulation' }}>تراجع</button>
+        <button disabled={pending} onClick={onConfirm} style={{ flex: 1, padding: '13px', borderRadius: '12px', background: 'linear-gradient(135deg, #ef4444, #dc2626)', border: 'none', color: '#fff', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'Cairo', sans-serif", boxShadow: '0 4px 15px rgba(239,68,68,0.35)', touchAction: 'manipulation' }}>{pending ? 'جاري تأكيد الإنهاء...' : 'إنهاء البث'}</button>
       </div>
     </div>
   </div>
@@ -434,6 +436,8 @@ export default function ActiveLiveRoom({
   const [banToast, setBanToast]             = useState<string | null>(null);
   const [selectedMsgId, setSelectedMsgId]   = useState<string | null>(null);
   const [showEndModal, setShowEndModal]     = useState(false);
+  const [endingStream, setEndingStream]     = useState(false);
+  const [endError, setEndError]             = useState<string | null>(null);
   const [cameraReady, setCameraReady]       = useState(false);
   const [liveKitToken, setLiveKitToken]     = useState<string | null>(null);
 
@@ -442,6 +446,7 @@ export default function ActiveLiveRoom({
   const roomChannelRef      = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const heartbeatRef        = useRef<ReturnType<typeof setInterval> | null>(null);
   const heartbeatRunning    = useRef(false);
+  const endingRef          = useRef(false);
 
   const filtersList = [
     { id: 'natural',    effect: 'none' },
@@ -493,14 +498,28 @@ export default function ActiveLiveRoom({
 
   // ── إنهاء البث بأمان ──
   const endStreamSafely = useCallback(async () => {
-    stopHeartbeat();
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    await supabase
-      .from('live_streams')
-      .update({ is_live: false, last_heartbeat_at: new Date().toISOString() })
-      .eq('id', streamId)
-      .eq('user_id', String(myUserId));
-    onEndStream();
+    if (endingRef.current) return;
+    endingRef.current = true;
+    setEndingStream(true);
+    setEndError(null);
+    try {
+      // Keep publishing and heartbeating until the server confirms the end.
+      // If the write fails or affects zero rows, the broadcaster must be
+      // able to retry instead of leaving a ghost live_streams record.
+      if (!(await endLiveStreamOnServer(streamId, String(myUserId)))) {
+        setEndError('لم يتم تأكيد إنهاء البث على الخادم. تحقق من الإنترنت وحاول مرة أخرى.');
+        return;
+      }
+      stopHeartbeat();
+      streamRef.current?.getTracks().forEach(track => track.stop());
+      onEndStream();
+    } catch (error) {
+      console.error('Stream shutdown failed:', error);
+      setEndError('تعذر تأكيد إنهاء البث. أعد المحاولة.');
+    } finally {
+      endingRef.current = false;
+      setEndingStream(false);
+    }
   }, [streamId, myUserId, stopHeartbeat, onEndStream]);
 
   // ── الكاميرا ──
@@ -750,8 +769,10 @@ export default function ActiveLiveRoom({
 
       {showEndModal && (
         <EndStreamModal
-          onConfirm={() => { setShowEndModal(false); endStreamSafely(); }}
-          onCancel={() => setShowEndModal(false)}
+          onConfirm={() => { void endStreamSafely(); }}
+          onCancel={() => { if (!endingStream) { setEndError(null); setShowEndModal(false); } }}
+          pending={endingStream}
+          error={endError}
         />
       )}
     </div>
