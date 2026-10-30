@@ -67,7 +67,7 @@ function App() {
 
   if (user && profileChecked && showOnboarding) return (
     <Suspense fallback={<Loading />}>
-      <Onboarding onComplete={(data: OnboardingData) => handleOnboardingComplete(data, user.id)} />
+      <Onboarding error={profileError} onComplete={(data: OnboardingData) => handleOnboardingComplete(data, user.id)} />
     </Suspense>
   );
 
