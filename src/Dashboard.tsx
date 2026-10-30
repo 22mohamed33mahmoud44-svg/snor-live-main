@@ -33,7 +33,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   
   const [openChat, setOpenChat] = useState<ChatOther | null>(null);
   const [activeCall, setActiveCall] = useState<CallState | null>(null);
-  const [incomingCall, setIncomingCall] = useState<{ id: string; callerId: string } | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{ id: string; callerId: string; type: 'video' | 'audio' } | null>(null);
   const [outgoingCall, setOutgoingCall] = useState<{ id: string; remoteId: string; type: 'video' | 'audio'; startedAt: number } | null>(null);
   const [callError, setCallError] = useState<string | null>(null);
   const [showRandomMatch, setShowRandomMatch] = useState(false);
@@ -50,7 +50,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   // A direct call is a pending database invitation, not a client-generated LiveKit room.
   const handleStartCall = useCallback(async (remoteId: string, type: 'video' | 'audio') => {
     setCallError(null);
-    const { data: matchId, error } = await supabase.rpc('create_direct_call', { p_callee: remoteId });
+    const { data: matchId, error } = await supabase.rpc('create_direct_call', { p_callee: remoteId, p_type: type });
     if (error || !matchId) {
       console.error('Could not create direct call', error);
       setCallError('تعذر بدء المكالمة. تأكد من وجود محادثة سابقة مع المستخدم وأنه غير مشغول.');
@@ -63,12 +63,12 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   // Incoming invitations: filtered realtime plus polling if the websocket is unavailable.
   useEffect(() => {
     let cancelled = false;
-    if (activeCall) return;
+    if (activeCall || outgoingCall) return;
 
     const checkIncoming = async () => {
       const cutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
       const { data, error } = await supabase.from('matches')
-        .select('id, user1')
+        .select('id, user1, call_type')
         .eq('kind', 'direct')
         .eq('status', 'pending')
         .eq('user2', userId)
@@ -77,7 +77,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
         .limit(1)
         .maybeSingle();
       if (!cancelled && !error) {
-        setIncomingCall(data ? { id: data.id, callerId: data.user1 } : null);
+        setIncomingCall(data ? { id: data.id, callerId: data.user1, type: data.call_type === 'audio' ? 'audio' : 'video' } : null);
       }
     };
 
@@ -94,7 +94,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       clearInterval(interval);
       void supabase.removeChannel(channel);
     };
-  }, [userId, activeCall]);
+  }, [userId, activeCall, outgoingCall]);
 
   // Do not request a LiveKit token until the recipient has explicitly accepted.
   useEffect(() => {
@@ -149,7 +149,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     }
     if (accept) {
       setOpenChat(null);
-      setActiveCall({ matchId: invitation.id, remoteUserId: invitation.callerId, type: 'video' });
+      setActiveCall({ matchId: invitation.id, remoteUserId: invitation.callerId, type: invitation.type });
     }
   };
 
@@ -170,7 +170,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
         <div role="dialog" aria-modal="true" aria-label="المكالمات" style={{ width: 'min(420px,100%)', padding: 26, borderRadius: 22, background: '#17152b', color: 'white', textAlign: 'center', boxShadow: '0 15px 70px #0008' }}>
           {incomingCall ? (
             <>
-              <h3>مكالمة واردة</h3>
+              <h3>{incomingCall.type === 'audio' ? 'مكالمة صوتية واردة' : 'مكالمة فيديو واردة'}</h3>
               <p>هناك مستخدم يطلب مكالمة معك. هل تريد قبولها؟</p>
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
                 <button type="button" onClick={() => { void respondToCall(true); }}>قبول</button>
@@ -223,7 +223,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
   }, [userId]);
 
   // ── Screen Router ─────────────────────────────────────────────
-  if (activeCall) return <VideoCall userId={userId} matchId={activeCall.matchId} onEnd={() => setActiveCall(null)} onNext={() => { setActiveCall(null); setShowRandomMatch(true); }} />;
+  if (activeCall) return <VideoCall userId={userId} matchId={activeCall.matchId} callType={activeCall.type} onEnd={() => setActiveCall(null)} onNext={() => { setActiveCall(null); setShowRandomMatch(true); }} />;
   if (showRandomMatch) return <><RandomMatch userId={userId} onClose={() => setShowRandomMatch(false)} onMatch={(match) => { setShowRandomMatch(false); const remoteUserId = match.user1 === userId ? match.user2 : match.user1; setActiveCall({ matchId: match.id, remoteUserId, type: 'video' }); }} />{callOverlay}</>;
   if (openChat) return <><PrivateChat myId={userId} other={openChat} onBack={() => setOpenChat(null)} onStartCall={handleStartCall} />{callOverlay}</>;
   if (showSettings) return <><SettingsPanel onClose={() => setShowSettings(false)} myProfile={myProfile} onLogout={onLogout} onOpenEdit={() => { setShowSettings(false); setShowEditProfile(true); }} />{callOverlay}</>;
