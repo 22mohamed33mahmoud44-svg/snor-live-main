@@ -246,7 +246,13 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const MESSAGES_LIMIT = 30;
 
 // ── LiveKit Publisher (يقوم بنشر الكاميرا بأمان) ──
-const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
+const StreamPublisher = memo(({
+  stream, onPublished, onPublishError,
+}: {
+  stream: MediaStream | null;
+  onPublished: () => void;
+  onPublishError: (error: Error) => void;
+}) => {
   const room = useRoomContext();
   const connectionState = useConnectionState();
 
@@ -258,7 +264,9 @@ const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
 
     const publishTracks = async () => {
       try {
-        for (const track of stream.getTracks()) {
+        const liveTracks = stream.getTracks().filter(track => track.readyState === 'live');
+        if (!liveTracks.length) throw new Error('No active broadcaster media tracks');
+        for (const track of liveTracks) {
           if (disposed || track.readyState !== 'live') return;
           const source = track.kind === 'video' ? Track.Source.Camera : Track.Source.Microphone;
           // LiveKit may restore publications itself after reconnecting.
@@ -275,8 +283,12 @@ const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
             return;
           }
         }
+        if (!disposed) onPublished();
       } catch (error) {
-        if (!disposed) console.error('تعذر نشر كاميرا أو ميكروفون البث:', error);
+        if (!disposed) {
+          console.error('تعذر نشر كاميرا أو ميكروفون البث:', error);
+          onPublishError(error instanceof Error ? error : new Error(String(error)));
+        }
       }
     };
 
@@ -295,7 +307,7 @@ const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
         }
       }
     };
-  }, [room, stream, connectionState]);
+  }, [room, stream, connectionState, onPublished, onPublishError]);
 
   return null;
 });
@@ -464,6 +476,9 @@ export default function ActiveLiveRoom({
   const [endError, setEndError]             = useState<string | null>(null);
   const [cameraReady, setCameraReady]       = useState(false);
   const [liveKitToken, setLiveKitToken]     = useState<string | null>(null);
+  const [liveKitError, setLiveKitError]     = useState<string | null>(null);
+  const [mediaPublished, setMediaPublished] = useState(false);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
 
   const videoRef            = useRef<HTMLVideoElement>(null);
   const streamRef           = useRef<MediaStream | null>(null);
@@ -471,6 +486,7 @@ export default function ActiveLiveRoom({
   const heartbeatRef        = useRef<ReturnType<typeof setInterval> | null>(null);
   const heartbeatRunning    = useRef(false);
   const endingRef          = useRef(false);
+  const ignoreDisconnectRef = useRef(false);
 
   const filtersList = [
     { id: 'natural',    effect: 'none' },
@@ -482,22 +498,72 @@ export default function ActiveLiveRoom({
   ];
   const activeFilterEffect = filtersList.find(f => f.id === filterId)?.effect ?? 'none';
 
-  // ── جلب توكن LiveKit للمذيع ──
+  // A missing LiveKit token must not leave the broadcaster looking LIVE.
   useEffect(() => {
-    let isCancelled = false;
+    let cancelled = false;
+    setLiveKitToken(null);
+    setLiveKitError(null);
+    setMediaPublished(false);
+
+    const tokenTimeout = window.setTimeout(() => {
+      cancelled = true;
+      setLiveKitError('انتهت مهلة الاتصال بخادم البث. أعد المحاولة أو أنهِ البث.');
+    }, 20_000);
+
     async function fetchToken() {
       try {
-        const { data } = await supabase.functions.invoke('livekit-token', {
-          body: { room: streamId, username: myUsername || 'المذيع', isStreamer: true }
+        const { data, error } = await supabase.functions.invoke('livekit-token', {
+          body: { room: streamId, username: myUsername || 'المذيع', isStreamer: true },
         });
-        if (!isCancelled && data?.token) setLiveKitToken(data.token);
-      } catch (e) {
-        console.error("LiveKit Token error", e);
+        if (cancelled) return;
+        if (error || !data?.token) throw error ?? new Error('Missing broadcaster LiveKit token');
+        ignoreDisconnectRef.current = false;
+        setLiveKitToken(data.token);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Broadcaster LiveKit token failed:', error);
+          setLiveKitError('تعذر تجهيز البث على الخادم. أعد المحاولة أو أنهِ البث.');
+        }
+      } finally {
+        window.clearTimeout(tokenTimeout);
       }
     }
-    fetchToken();
-    return () => { isCancelled = true; };
-  }, [streamId, myUsername]);
+
+    void fetchToken();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(tokenTimeout);
+    };
+  }, [streamId, myUsername, connectionAttempt]);
+
+  const handleMediaPublished = useCallback(() => {
+    setMediaPublished(true);
+    setLiveKitError(null);
+  }, []);
+
+  const handleMediaFailure = useCallback((error: Error) => {
+    if (ignoreDisconnectRef.current || endingRef.current) return;
+    console.error('Broadcaster LiveKit media failure:', error);
+    setMediaPublished(false);
+    setLiveKitError('تعذر توصيل الصوت أو الصورة للمشاهدين. أعد الاتصال أو أنهِ البث.');
+  }, []);
+
+  // Waiting for a token, a WebSocket, or a track publish must be bounded.
+  useEffect(() => {
+    if (!liveKitToken || mediaPublished || liveKitError) return;
+    const watchdog = window.setTimeout(() => {
+      setLiveKitError('تأخر نشر البث للمشاهدين. جرّب إعادة الاتصال.');
+    }, 35_000);
+    return () => window.clearTimeout(watchdog);
+  }, [liveKitToken, mediaPublished, liveKitError]);
+
+  const retryMediaConnection = useCallback(() => {
+    ignoreDisconnectRef.current = true;
+    setMediaPublished(false);
+    setLiveKitError(null);
+    setLiveKitToken(null);
+    setConnectionAttempt(attempt => attempt + 1);
+  }, []);
 
   // ── Heartbeat ──
   const sendHeartbeat = useCallback(async () => {
@@ -778,7 +844,7 @@ export default function ActiveLiveRoom({
             <div style={styles.streamerAvatar}>أنت</div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>{myUsername || title}</span>
-              <span style={{ fontSize: '0.65rem', color: '#4ade80', fontWeight: 700 }}>LIVE {formatTime(uptime)}</span>
+              <span style={{ fontSize: '0.65rem', color: mediaPublished ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{mediaPublished ? `LIVE ${formatTime(uptime)}` : 'جاري تجهيز البث'}</span>
             </div>
           </div>
           <div style={styles.statsRow}>
@@ -799,6 +865,21 @@ export default function ActiveLiveRoom({
         </div>
       </div>
 
+      {!mediaPublished && (
+        <div
+          onClick={event => event.stopPropagation()}
+          role={liveKitError ? 'alert' : 'status'}
+          style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(3, 7, 18, 0.92)', color: '#fff', padding: 22, textAlign: 'center' }}
+        >
+          <div style={{ maxWidth: 340, display: 'flex', alignItems: 'center', flexDirection: 'column', gap: 14 }}>
+            <strong>{liveKitError ? 'تعذر توصيل البث للمشاهدين' : 'جاري تجهيز الاتصال بالبث...'}</strong>
+            {liveKitError && <p style={{ color: '#fecaca', fontSize: '0.87rem', margin: 0 }}>{liveKitError}</p>}
+            {liveKitError && <button type="button" onClick={retryMediaConnection} style={{ border: 0, borderRadius: 10, background: '#0e7490', color: '#fff', padding: '12px 18px', fontWeight: 700 }}>إعادة الاتصال</button>}
+            <button type="button" onClick={() => setShowEndModal(true)} style={{ border: '1px solid rgba(255,255,255,.3)', borderRadius: 10, background: 'rgba(255,255,255,.12)', color: '#fff', padding: '10px 16px' }}>إنهاء البث</button>
+          </div>
+        </div>
+      )}
+
       {showEndModal && (
         <EndStreamModal
           onConfirm={() => { void endStreamSafely(); }}
@@ -811,15 +892,32 @@ export default function ActiveLiveRoom({
   );
 
   // إذا تم استلام مفتاح LiveKit، نقوم بتغليف الواجهة به للاتصال بالخادم
-  if (liveKitToken) {
+  if (liveKitToken && !liveKitError) {
     return (
-      <LiveKitRoom token={liveKitToken} serverUrl={import.meta.env.VITE_LIVEKIT_URL} connect={true}>
-        <StreamPublisher stream={streamRef.current} />
+      <LiveKitRoom
+        key={`${streamId}-${connectionAttempt}`}
+        token={liveKitToken}
+        serverUrl={import.meta.env.VITE_LIVEKIT_URL}
+        connect={true}
+        video={false}
+        audio={false}
+        onError={handleMediaFailure}
+        onDisconnected={() => {
+          if (!ignoreDisconnectRef.current && !endingRef.current) {
+            handleMediaFailure(new Error('Broadcaster disconnected from LiveKit'));
+          }
+        }}
+      >
+        <StreamPublisher
+          stream={streamRef.current}
+          onPublished={handleMediaPublished}
+          onPublishError={handleMediaFailure}
+        />
         {roomContent}
       </LiveKitRoom>
     );
   }
 
-  // في حالة انتظار التوكن، نعرض الواجهة محلياً فقط مؤقتاً
+  // Remain in the safe local preview with a retry/exit overlay if token fails.
   return roomContent;
 };
