@@ -1,5 +1,5 @@
 /// <reference lib="deno.ns" />
-import { confirmLiveStreamEnded } from '../../src/utils/endLiveStreamOnServer.ts';
+import { confirmLiveStreamEnded } from '../../src/utils/liveStreamEndConfirmation.ts';
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
