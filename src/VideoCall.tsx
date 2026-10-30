@@ -15,10 +15,6 @@ const SFX_CONNECTING = 'https://assets.mixkit.co/active_storage/sfx/2568/2568-84
 const SFX_END = 'https://assets.mixkit.co/active_storage/sfx/2564/2564-84.wav';
 const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 type ErrorType = 'camera_denied' | 'camera_not_found' | 'connection_timeout' | 'connection_failed' | null;
-type SignalMessage = {
-  sender: string;
-  type: string;
-};
 const classifyLiveKitError = (error: unknown): Exclude<ErrorType, null> => {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? '').toLowerCase();
   const name = error instanceof Error ? error.name.toLowerCase() : '';
@@ -116,15 +112,76 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext, muted, set
   useEffect(() => { if (!isConnected) return; const t = setInterval(() => setDuration(d => d + 1), 1000); return () => clearInterval(t); }, [isConnected]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => { resetControlsTimer(); return () => { if (controlsTimer.current) clearTimeout(controlsTimer.current); }; }, [resetControlsTimer]);
+  // Match status, not a signal inserted after ending, is the authoritative
+  // source of truth. Supabase disallows signals inserts after status='ended',
+  // and its cleanup trigger removes old signals on that transition.
   useEffect(() => {
-    const channelName = `vc-chat-sig-${matchId}`;
-    const channel = supabase.channel(channelName)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` }, payload => { const incoming = payload.new as { id: string; sender_id: string; message: string }; setMessages(prev => (prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming])); if (incoming.sender_id !== userId) setNewMsg(true); })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` }, payload => { const msg = payload.new as SignalMessage; if (msg.sender !== userId && msg.type === 'end') { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } const audio = new Audio(SFX_END); audio.volume = 0.4; audio.play().catch(() => {}); sfxRef.current = audio; onEndRef.current(); } })
+    let disposed = false;
+    const handleEnded = () => {
+      if (disposed || endingRef.current) return;
+      endingRef.current = true;
+      playSFX(SFX_END);
+      onEndRef.current();
+    };
+
+    const checkEnded = async () => {
+      const { data, error } = await supabase
+        .from('matches')
+        .select('status')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (!disposed && !error && data?.status === 'ended') {
+        handleEnded();
+      }
+    };
+
+    const channel = supabase.channel(`vc-chat-match-${matchId}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'messages',
+        filter: `match_id=eq.${matchId}`,
+      }, payload => {
+        const incoming = payload.new as { id: string; sender_id: string; message: string };
+        setMessages(prev => prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming]);
+        if (incoming.sender_id !== userId) setNewMsg(true);
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'matches',
+        filter: `id=eq.${matchId}`,
+      }, payload => {
+        const match = payload.new as { status?: string };
+        if (match.status === 'ended') handleEnded();
+      })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [matchId, userId]);
-  const triggerEndMatch = async (action: 'next' | 'end') => { if (endingRef.current) return; endingRef.current = true; playSFX(SFX_END); try { await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId); await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId }); } finally { action === 'next' ? onNext() : onEnd(); } };
+
+    void checkEnded();
+    const poll = setInterval(() => { void checkEnded(); }, 3000);
+    return () => {
+      disposed = true;
+      clearInterval(poll);
+      void supabase.removeChannel(channel);
+    };
+  }, [matchId, userId, playSFX]);
+
+  const triggerEndMatch = async (action: 'next' | 'end') => {
+    if (endingRef.current) return;
+    endingRef.current = true;
+    // Do not write to signals after ending: RLS rejects that insert.
+    const { error } = await supabase.from('matches')
+      .update({ status: 'ended' })
+      .eq('id', matchId)
+      .eq('status', 'active');
+
+    if (error) {
+      endingRef.current = false;
+      console.error('Could not end match in database', error);
+      window.alert('تعذر إنهاء المكالمة على الخادم. حاول مرة أخرى.');
+      return;
+    }
+
+    playSFX(SFX_END);
+    if (action === 'next') onNext();
+    else onEnd();
+  };
   const sendMessage = async () => { const text = input.trim(); if (!text) return; setInput(''); const { error } = await supabase.from('messages').insert({ match_id: matchId, sender_id: userId, message: text }); if (error) console.error('Message send failed:', error); };
   const openChat = () => { setShowChat(true); setNewMsg(false); setShowControls(true); };
   const closeChat = () => { setShowChat(false); resetControlsTimer(); };
