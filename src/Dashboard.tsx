@@ -117,7 +117,8 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
       } else if (Date.now() - outgoingCall.startedAt > 2 * 60 * 1000) {
         setOutgoingCall(null);
         setCallError('انتهت مهلة انتظار الرد على المكالمة.');
-        void supabase.from('matches').update({ status: 'ended' }).eq('id', outgoingCall.id).eq('status', 'pending');
+        void supabase.from('matches').update({ status: 'ended' })
+          .eq('id', outgoingCall.id).in('status', ['pending', 'active']);
       }
     };
     void checkOutgoing();
@@ -160,7 +161,7 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
     const { error } = await supabase.from('matches')
       .update({ status: 'ended' })
       .eq('id', invitation.id)
-      .eq('status', 'pending');
+      .in('status', ['pending', 'active']);
     if (error) console.error('Could not cancel direct call', error);
   };
 
