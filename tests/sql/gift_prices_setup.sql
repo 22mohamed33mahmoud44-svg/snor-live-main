@@ -1,4 +1,8 @@
 -- Disposable Postgres 17 fixture. NEVER run this against production.
+CREATE ROLE authenticated NOLOGIN;
+CREATE ROLE anon NOLOGIN;
+CREATE ROLE service_role NOLOGIN;
+
 CREATE SCHEMA auth;
 CREATE SCHEMA app_private;
 
