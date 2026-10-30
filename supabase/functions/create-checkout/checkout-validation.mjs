@@ -34,3 +34,33 @@ export function buildCheckoutRedirects(appUrl) {
     cancelUrl: `${origin}/?payment=cancelled`,
   };
 }
+
+/**
+ * Return the actual checkout amount quoted by Stripe, not a UI price guess.
+ * Reject missing totals rather than letting the browser display an invented amount.
+ */
+export function checkoutDisplayDetails(session) {
+  const amount = session?.amount_total;
+  const currency = session?.currency;
+  const checkoutUrl = session?.url;
+  if (!Number.isSafeInteger(amount) || amount <= 0 ||
+      typeof currency !== 'string' || !/^[a-z]{3}$/i.test(currency) ||
+      typeof checkoutUrl !== 'string') {
+    return null;
+  }
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(checkoutUrl);
+  } catch {
+    return null;
+  }
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password) {
+    return null;
+  }
+  return {
+    session_id: session.id,
+    checkout_url: checkoutUrl,
+    amount_total: amount,
+    currency: currency.toUpperCase(),
+  };
+}
