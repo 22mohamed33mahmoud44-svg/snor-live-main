@@ -1,7 +1,8 @@
 
-import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { supabase } from '../supabase';
 import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
+import { createCallMessageSender } from '../utils/callMessageSender';
 import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
@@ -363,29 +364,52 @@ const ChatMessageList = memo(({
 });
 
 // ── ChatInputArea ──
-const ChatInputArea = memo(({ onSendMessage }: { onSendMessage: (text: string) => void }) => {
+// Keep an unsent draft in place until Supabase acknowledges the write.
+const ChatInputArea = memo(({ onSendMessage }: { onSendMessage: (text: string) => Promise<boolean> }) => {
   const [chatInput, setChatInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const sendingRef = useRef(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const trimmed = chatInput.trim();
-    if (!trimmed) return;
-    onSendMessage(trimmed);
-    setChatInput('');
+    const draft = chatInput;
+    if (!draft.trim() || sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    setSendError(null);
+    try {
+      if (await onSendMessage(draft)) {
+        // If the streamer typed more while the insert was pending, keep it.
+        setChatInput(current => current === draft ? '' : current);
+      } else {
+        setSendError('تعذر إرسال الرسالة. النص محفوظ هنا لإعادة المحاولة.');
+      }
+    } catch (error) {
+      console.error('Stream chat submission failed:', error);
+      setSendError('تعذر إرسال الرسالة. النص محفوظ هنا لإعادة المحاولة.');
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
   };
 
   return (
-    <div style={styles.chatInputRow}>
-      <input
-        type="text"
-        value={chatInput}
-        onChange={e => setChatInput(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && handleSubmit(e as React.FormEvent)}
-        placeholder="تحدث مع المتابعين..."
-        style={styles.chatInput}
-      />
-      <button onClick={handleSubmit} style={styles.chatSendBtn} aria-label="إرسال">💬</button>
-    </div>
+    <form style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }} onSubmit={e => { void handleSubmit(e); }}>
+      <div style={styles.chatInputRow}>
+        <input
+          type="text"
+          value={chatInput}
+          onChange={e => { setChatInput(e.target.value); if (sendError) setSendError(null); }}
+          placeholder="تحدث مع المتابعين..."
+          style={styles.chatInput}
+        />
+        <button type="submit" disabled={sending || !chatInput.trim()} style={{ ...styles.chatSendBtn, opacity: sending ? 0.5 : 1 }} aria-label="إرسال">
+          {sending ? '…' : '💬'}
+        </button>
+      </div>
+      {sendError && <p role="alert" style={{ color: '#fecaca', background: 'rgba(127,29,29,.6)', borderRadius: 8, padding: '6px 10px', fontSize: '.75rem', margin: 0 }}>{sendError}</p>}
+    </form>
   );
 });
 
@@ -653,24 +677,32 @@ export default function ActiveLiveRoom({
     return () => clearTimeout(id);
   }, [banToast]);
 
-  // ── القضاء على مشكلة الـ IDs ──
-  const handleSendMessage = useCallback(async (text: string) => {
+  // ── حفظ شات المذيع بأمان مع منع الطلبات المكررة ──
+  const messageSender = useMemo(() => createCallMessageSender(async (message: string) => {
+    const { error } = await supabase.from('stream_chat').insert([{
+      stream_id: streamId, user_id: String(myUserId),
+      username: myUsername || 'المذيع', message,
+    }]);
+    return { error };
+  }), [streamId, myUserId, myUsername]);
+
+  const handleSendMessage = useCallback(async (text: string): Promise<boolean> => {
+    if (!text.trim() || messageSender.isSending()) return false;
     const optimisticId = `opt-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 
     setChatMessages(prev => [
       ...prev.slice(-(MESSAGES_LIMIT - 1)),
-      { id: optimisticId, user: myUsername || 'المذيع', userId: myUserId, text, color: '#ff2a74', isOptimistic: true },
+      { id: optimisticId, user: myUsername || 'المذيع', userId: myUserId, text: text.trim(), color: '#ff2a74', isOptimistic: true },
     ]);
 
-    const { error } = await supabase.from('stream_chat').insert([{
-      stream_id: streamId, user_id: String(myUserId), username: myUsername || 'المذيع', message: text,
-    }]);
-
-    if (error) {
-      setChatMessages(prev => prev.filter(m => m.id !== optimisticId));
-      console.error('فشل إرسال الرسالة:', error.message);
+    const result = await messageSender.send(text);
+    if (result.status !== 'sent') {
+      setChatMessages(prev => prev.filter(message => message.id !== optimisticId));
+      return false;
     }
-  }, [streamId, myUserId, myUsername]);
+    // Realtime swaps the optimistic message with the persisted server ID.
+    return true;
+  }, [messageSender, myUserId, myUsername]);
 
   const handleBanUser = useCallback(async (targetUserId: string, targetUsername: string) => {
     if (targetUserId === myUserId || bannedUsers.has(targetUserId)) {
