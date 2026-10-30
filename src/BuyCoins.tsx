@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { supabase } from "./supabase";
 
 const PACKAGES = [
@@ -7,57 +7,14 @@ const PACKAGES = [
   { id: "pkg_1000", coins: 1000, price: 80, label: "أفضل قيمة", emoji: "👑", color: "#10b981", popular: false },
 ];
 
-type Step = "select" | "loading" | "awaiting_payment" | "error" | "success";
+type Step = "select" | "loading" | "error";
 
 export default function BuyCoins({ onClose }: { onClose?: () => void }) {
   const [selectedPkg, setSelectedPkg] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("select");
   const [errorMsg, setErrorMsg] = useState("");
-  const [userId, setUserId] = useState<string | null>(null);
-  const stepRef = useRef<Step>(step);
-
-  useEffect(() => {
-    stepRef.current = step;
-  }, [step]);
-
-  useEffect(() => {
-    let cancelled = false;
-    supabase.auth.getUser().then(({ data }) => {
-      if (!cancelled) setUserId(data.user?.id || null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!userId) return;
-
-    const subscription = supabase
-      .channel(`buy-coins-update-${userId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "users_coins",
-          filter: `user_id=eq.${userId}`,
-        },
-        () => {
-          if (stepRef.current === "loading" || stepRef.current === "awaiting_payment") {
-            setStep("success");
-          }
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(subscription);
-    };
-  }, [userId]);
-
   const handleBuy = async () => {
-    if (!selectedPkg) return;
+    if (!selectedPkg || step === "loading") return;
 
     setStep("loading");
     setErrorMsg("");
@@ -71,7 +28,6 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
       if (!data?.checkout_url) throw new Error("لم يتم تجهيز رابط الدفع");
 
       window.location.assign(data.checkout_url);
-      setStep("awaiting_payment");
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : "حدث خطأ غير متوقع أثناء تجهيز الدفع");
       setStep("error");
@@ -98,17 +54,6 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
         <button onClick={onClose} className="bc-close-btn" aria-label="إغلاق">✕</button>
       )}
 
-      {step === "success" ? (
-        <div className="bc-loading-overlay" style={{ background: "rgba(5,5,10,0.95)" }}>
-          <div style={{ fontSize: 60, marginBottom: 16 }}>🎉</div>
-          <h2 style={{ color: "#10b981", fontSize: 24, fontWeight: 800 }}>تم الشحن بنجاح!</h2>
-          <p style={{ color: "rgba(255,255,255,0.6)", marginTop: 8 }}>تمت إضافة الكوينز إلى محفظتك.</p>
-          <button onClick={onClose} className="bc-submit-btn" style={{ maxWidth: 200, marginTop: 24 }}>
-            العودة للتطبيق
-          </button>
-        </div>
-      ) : (
-        <>
           <div style={{ textAlign: "center", marginBottom: 40, marginTop: onClose ? 20 : 0 }}>
             <div style={{ fontSize: 52, filter: "drop-shadow(0 4px 15px rgba(255,215,0,0.3))", animation: "bc-float 3s ease-in-out infinite" }}>🪙</div>
             <h1 style={{ fontSize: 26, fontWeight: 800, margin: "12px 0 0", background: "linear-gradient(135deg,#fff,#a78bfa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
@@ -147,8 +92,6 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
               </button>
             </div>
           )}
-        </>
-      )}
 
       {step === "loading" && (
         <div className="bc-loading-overlay">
