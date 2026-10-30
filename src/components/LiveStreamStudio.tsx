@@ -9,6 +9,7 @@ import {
 interface LiveStreamStudioProps {
   onClose: () => void;
   onStart: (title: string, filterId: string, intensity: number, stream: MediaStream | null) => Promise<boolean>;
+  launchFailure?: string | null;
 }
 
 interface FilterType {
@@ -40,7 +41,7 @@ const filtersList: FilterType[] = [
   { id: 'mystic', name: 'سحر الغموض', icon: '🔮', getEffect: (v) => `hue-rotate(${v * 0.7}deg)`, unit: '%', defaultVal: 45, min: 0, max: 100 },
 ];
 
-export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioProps) {
+export default function LiveStreamStudio({ onClose, onStart, launchFailure }: LiveStreamStudioProps) {
   const [streamTitle, setStreamTitle] = useState('');
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
@@ -323,7 +324,7 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
           >
             {launching ? 'جاري بدء البث...' : 'بدء البث المباشر الآن 🚀'}
           </motion.button>
-          {launchError && <p role="alert" className="text-red-300 bg-red-950/70 rounded-lg p-2 text-center text-xs">{launchError}</p>}
+          {(launchFailure || launchError) && <p role="alert" className="text-red-300 bg-red-950/70 rounded-lg p-2 text-center text-xs">{launchFailure || launchError}</p>}
         </footer>
 
         <AnimatePresence>
@@ -511,7 +512,7 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
         >
           {launching ? 'جاري بدء البث...' : 'نشر وإطلاق البث الآن 🚀'}
         </motion.button>
-        {launchError && <p role="alert" className="text-red-300 bg-red-950/70 rounded-lg p-3 text-center text-xs">{launchError}</p>}
+        {(launchFailure || launchError) && <p role="alert" className="text-red-300 bg-red-950/70 rounded-lg p-3 text-center text-xs">{launchFailure || launchError}</p>}
       </aside>
 
     </div>
