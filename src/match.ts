@@ -49,6 +49,8 @@ export const cancelMatching = async (userId: string): Promise<void> => {
     .rpc('cancel_waiting', { p_user_id: userId });
 
   if (error) {
-    // non-fatal — waiting_users row will be cleaned up later
+    // A failed cancel must not be reported as success: otherwise the user
+    // may remain in matchmaking and be paired after pressing Cancel.
+    throw new Error(error.message);
   }
 };
