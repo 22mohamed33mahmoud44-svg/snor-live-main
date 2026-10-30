@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { AccessToken } from 'npm:livekit-server-sdk@2';
+import { AccessToken, TrackSource } from 'npm:livekit-server-sdk@2';
 import { authorizeRoom } from './authorization.mjs';
 
 const corsHeaders = {
@@ -46,13 +46,13 @@ Deno.serve(async (req: Request) => {
     );
 
     // The database is authoritative for authorization; lookup failures must deny access.
-    const { authorized, canPublish, kind } = await authorizeRoom(
+    const authorization = await authorizeRoom(
       room,
       user.id,
       async (roomId: string) => {
         const { data, error } = await admin
           .from('matches')
-          .select('user1, user2, status')
+          .select('user1, user2, status, kind, call_type')
           .eq('id', roomId)
           .maybeSingle();
         if (error) throw error;
@@ -69,6 +69,7 @@ Deno.serve(async (req: Request) => {
       },
     );
 
+    const { authorized, canPublish, kind } = authorization;
     if (!authorized) {
       return json({ error: 'Forbidden: not a participant of this room' }, 403);
     }
@@ -102,6 +103,11 @@ Deno.serve(async (req: Request) => {
       canPublish,
       canPublishData: true,
       canSubscribe: true,
+      // Only microphone tracks may be published for consented audio calls.
+      // Enforced in the signed LiveKit token, not merely in React UI.
+      ...('publishSources' in authorization && authorization.publishSources?.includes('microphone')
+        ? { canPublishSources: [TrackSource.MICROPHONE] }
+        : {}),
     });
 
     const token = await at.toJwt();
