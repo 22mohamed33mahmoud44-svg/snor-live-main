@@ -277,3 +277,42 @@ jobs:
           deno check --no-lock --node-modules-dir=auto supabase/functions/livekit-token/index.ts
           deno check --no-lock --node-modules-dir=auto supabase/functions/stripe-webhook/index.ts
           deno check --no-lock --node-modules-dir=auto supabase/functions/create-checkout/index.ts
+
+  combined-wallet-database-tests:
+    name: Test Stripe-funded gifts in one PostgreSQL database
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Apply both real migrations to one wallet and reconcile ledgers
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/gift_prices_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/combined_wallet_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030000000_020_atomic_stripe_checkout_credit.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/combined_wallet_assertions.sql
