@@ -91,12 +91,98 @@ BEGIN
     RAISE EXCEPTION 'Repeated acceptance unexpectedly succeeded';
   END IF;
 
-  -- A participant may end an active call.
+  -- Signals are allowed only during the active call.
+  INSERT INTO public.signals(match_id,sender,type,data)
+  VALUES (call_id, auth.uid(), 'test', '{}'::jsonb);
+  IF NOT EXISTS (SELECT 1 FROM public.signals WHERE match_id=call_id) THEN
+    RAISE EXCEPTION 'Active call signal failed';
+  END IF;
+
+  -- A participant ends the call by updating the authoritative matches row.
   UPDATE public.matches SET status='ended' WHERE id=call_id;
   SELECT status INTO v_status FROM public.matches WHERE id=call_id;
   IF v_status <> 'ended' THEN RAISE EXCEPTION 'Participant could not end call'; END IF;
+
+  -- Production deletes signals when status becomes ended.
+  IF EXISTS (SELECT 1 FROM public.signals WHERE match_id=call_id) THEN
+    RAISE EXCEPTION 'Match-ending trigger did not clean up signals';
+  END IF;
+
+  -- This used to be the broken client flow: INSERT end signal after the
+  -- UPDATE. Verify production RLS rejects the insert.
+  BEGIN
+    INSERT INTO public.signals(match_id,sender,type,data)
+    VALUES (call_id, auth.uid(), 'end', '{}'::jsonb);
+    RAISE EXCEPTION 'Post-end signal unexpectedly allowed';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
 END;
 $$;
 
+-- Caller may cancel a still-pending call; recipient cannot accept afterward.
+SELECT set_config('request.jwt.claim.sub','11111111-1111-4111-8111-111111111111',false);
+DO $cancel_pending$
+DECLARE
+  call_id uuid;
+  state text;
+BEGIN
+  call_id := public.create_direct_call(
+    '22222222-2222-4222-8222-222222222222', 'video'
+  );
+  UPDATE public.matches SET status='ended'
+  WHERE id=call_id AND status IN ('pending','active');
+  SELECT status INTO state FROM public.matches WHERE id=call_id;
+  IF state <> 'ended' THEN RAISE EXCEPTION 'Caller failed to cancel pending call'; END IF;
+  PERFORM set_config('test.cancelled_invite',call_id::text,false);
+END;
+$cancel_pending$;
+
+SELECT set_config('request.jwt.claim.sub','22222222-2222-4222-8222-222222222222',false);
+DO $reject_late_acceptance$
+BEGIN
+  IF public.respond_direct_call(current_setting('test.cancelled_invite')::uuid,true)
+    IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'Recipient accepted a cancelled call';
+  END IF;
+END;
+$reject_late_acceptance$;
+
+-- Simulate a race: recipient accepted while caller still shows "waiting".
+-- Caller cancel must end both pending AND newly active matches.
+SELECT set_config('request.jwt.claim.sub','11111111-1111-4111-8111-111111111111',false);
+DO $start_race$
+DECLARE call_id uuid;
+BEGIN
+  call_id := public.create_direct_call(
+    '22222222-2222-4222-8222-222222222222','audio');
+  PERFORM set_config('test.accepted_before_cancel',call_id::text,false);
+END;
+$start_race$;
+
+SELECT set_config('request.jwt.claim.sub','22222222-2222-4222-8222-222222222222',false);
+DO $accept_race$
+BEGIN
+  IF NOT public.respond_direct_call(
+    current_setting('test.accepted_before_cancel')::uuid,true) THEN
+    RAISE EXCEPTION 'Race invitation acceptance failed';
+  END IF;
+END;
+$accept_race$;
+
+SELECT set_config('request.jwt.claim.sub','11111111-1111-4111-8111-111111111111',false);
+DO $cancel_race$
+DECLARE state text;
+BEGIN
+  UPDATE public.matches SET status='ended'
+  WHERE id=current_setting('test.accepted_before_cancel')::uuid
+    AND status IN ('pending','active');
+  SELECT status INTO state FROM public.matches
+  WHERE id=current_setting('test.accepted_before_cancel')::uuid;
+  IF state <> 'ended' THEN
+    RAISE EXCEPTION 'Caller left an accepted call active after cancel';
+  END IF;
+END;
+$cancel_race$;
+
 RESET ROLE;
-SELECT 'direct-call consent and RLS tests passed' AS result;
+SELECT 'direct-call consent, cancellation race and signal RLS tests passed' AS result;
