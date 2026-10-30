@@ -1,5 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { useAuth, OnboardingData } from './hooks/useAuth';
+import { shouldShowProfileError } from './utils/profileGate';
 import { translations } from './translations';
 
 type Match = {
@@ -62,7 +63,7 @@ function App() {
   const toggleLanguage = () => setLang(l => l === 'ar' ? 'en' : 'ar');
   if (showSplash) return <Suspense fallback={<Loading />}><Splash onDone={() => setShowSplash(false)} /></Suspense>;
 
-  if (user && profileError && !profileChecked) return <ProfileError message={profileError} onRetry={() => window.location.reload()} />;
+  if (shouldShowProfileError(Boolean(user), profileError, showOnboarding)) return <ProfileError message={profileError ?? 'تعذر التحقق من ملفك الشخصي.'} onRetry={() => window.location.reload()} />;
   if (user && !profileChecked) return <Loading />;
 
   if (user && profileChecked && showOnboarding) return (
