@@ -282,7 +282,7 @@ jobs:
           deno check --no-lock --node-modules-dir=auto supabase/functions/create-checkout/index.ts
 
       - name: Check signed LiveKit token media permissions
-        run: deno test --no-lock --node-modules-dir=auto supabase/functions/livekit-token/token-grants.test.mjs
+        run: deno test --allow-env --no-lock --node-modules-dir=auto supabase/functions/livekit-token/token-grants.test.mjs
 
   combined-wallet-database-tests:
     name: Test Stripe-funded gifts in one PostgreSQL database
