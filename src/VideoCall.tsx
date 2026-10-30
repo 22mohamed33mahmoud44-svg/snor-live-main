@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { supabase } from './supabase';
 import { endMatchOnServer } from './utils/endMatchOnServer';
 import { createCallMessageSender } from './utils/callMessageSender';
-import { LiveKitRoom, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
+import { LiveKitRoom, RoomAudioRenderer, StartAudio, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
 type Props = {
@@ -100,7 +100,51 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
 
   if (tokenLoading || !token) return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box"><VideoIcon /></div><h2>جاري تجهيز الاتصال</h2><p>نقوم بتجهيز الاتصال الآمن بالفيديو، لحظات...</p></div>;
 
-  return <LiveKitRoom token={token} serverUrl={import.meta.env.VITE_LIVEKIT_URL} connect={true} video={callType === 'video' && !camOff} audio={!muted} onError={(liveKitError) => setError(classifyLiveKitError(liveKitError))}><CallUI userId={userId} matchId={matchId} callType={callType} onEnd={onEnd} onNext={onNext} muted={muted} setMuted={setMuted} camOff={camOff} setCamOff={setCamOff} /></LiveKitRoom>;
+  return (
+    <LiveKitRoom
+      token={token}
+      serverUrl={import.meta.env.VITE_LIVEKIT_URL}
+      connect={true}
+      video={callType === 'video' && !camOff}
+      audio={!muted}
+      onError={(liveKitError) => setError(classifyLiveKitError(liveKitError))}
+    >
+      {/* Remote audio must be rendered for both video and audio-only calls.
+          This must NOT be muted when the user mutes their own microphone. */}
+      <RoomAudioRenderer />
+      {/* Browsers can block remote audio until the user taps a control.
+          LiveKit hides this button automatically once playback is permitted. */}
+      <StartAudio
+        label="اضغط لتشغيل صوت المكالمة"
+        style={{
+          position: 'fixed',
+          bottom: 112,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1002,
+          padding: '12px 18px',
+          border: '1px solid rgba(255,255,255,0.24)',
+          borderRadius: 12,
+          background: '#0e7490',
+          color: '#fff',
+          fontFamily: 'Cairo, sans-serif',
+          fontWeight: 700,
+          cursor: 'pointer',
+        }}
+      />
+      <CallUI
+        userId={userId}
+        matchId={matchId}
+        callType={callType}
+        onEnd={onEnd}
+        onNext={onNext}
+        muted={muted}
+        setMuted={setMuted}
+        camOff={camOff}
+        setCamOff={setCamOff}
+      />
+    </LiveKitRoom>
+  );
 }
 
 function CallUI({ userId, matchId, callType = 'video', onEnd, onNext, muted, setMuted, camOff, setCamOff }: Omit<Props, 'remoteUserId'> & { muted: boolean, setMuted: React.Dispatch<React.SetStateAction<boolean>>, camOff: boolean, setCamOff: React.Dispatch<React.SetStateAction<boolean>> }) {
