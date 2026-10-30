@@ -67,3 +67,48 @@ test('database failures must be surfaced rather than allowing access', async () 
     async () => ({ user_id: alice, is_live: true })),
   /database unavailable/);
 });
+
+test('audio-only direct calls allow microphone publishing only', async () => {
+  const [getMatch, getStream] = lookup({
+    user1: alice, user2: bob, status: 'active', kind: 'direct', call_type: 'audio',
+  });
+  for (const user of [alice, bob]) {
+    assert.deepEqual(await authorizeRoom(room, user, getMatch, getStream), {
+      authorized: true, canPublish: true, kind: 'match', publishSources: ['microphone'],
+    });
+  }
+});
+
+test('video direct calls and random matches retain their existing media grants', async () => {
+  for (const match of [
+    { user1: alice, user2: bob, status: 'active', kind: 'direct', call_type: 'video' },
+    { user1: alice, user2: bob, status: 'active', kind: 'random', call_type: 'video' },
+  ]) {
+    const [getMatch, getStream] = lookup(match);
+    assert.deepEqual(await authorizeRoom(room, alice, getMatch, getStream), {
+      authorized: true, canPublish: true, kind: 'match',
+    });
+  }
+});
+
+test('rejects invalid direct-call media types instead of issuing broad grants', async () => {
+  for (const call_type of [null, undefined, 'screen_share', 'unknown']) {
+    const [getMatch, getStream] = lookup({
+      user1: alice, user2: bob, status: 'active', kind: 'direct', call_type,
+    });
+    assert.equal((await authorizeRoom(room, alice, getMatch, getStream)).authorized, false);
+  }
+});
+
+test('inactive audio calls and strangers cannot obtain microphone grants', async () => {
+  for (const status of ['pending', 'ended']) {
+    const [getMatch, getStream] = lookup({
+      user1: alice, user2: bob, status, kind: 'direct', call_type: 'audio',
+    });
+    assert.equal((await authorizeRoom(room, alice, getMatch, getStream)).authorized, false);
+  }
+  const [getMatch, getStream] = lookup({
+    user1: alice, user2: bob, status: 'active', kind: 'direct', call_type: 'audio',
+  });
+  assert.equal((await authorizeRoom(room, eve, getMatch, getStream)).authorized, false);
+});
