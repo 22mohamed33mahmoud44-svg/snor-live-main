@@ -471,6 +471,9 @@ jobs:
       - name: Test cancellation never terminates a direct call
         run: deno test tests/unit/cancelRandomMatch.test.ts
 
+      - name: Keep call-chat drafts on failed message sends
+        run: deno test tests/unit/callMessageSender.test.ts
+
       - name: Check signed LiveKit token media permissions
         run: deno test --allow-env --no-lock --node-modules-dir=auto supabase/functions/livekit-token/token-grants.test.mjs
 
