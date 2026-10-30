@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from './supabase';
+import { saveOwnProfile } from './utils/saveOwnProfile';
 // Assuming a translation hook or prop exists, e.g. from a context
 // For this example, we'll imagine a `t` object with strings is available.
 
@@ -55,16 +56,13 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
       }
 
       // 2. الحفظ في قاعدة البيانات باستخدام upsert لتجنب تعارض البيانات
-      const { error } = await supabase.from('profiles').upsert({
-        id: userId,
-        username: username,
-        full_name: username, // إضافة الاسم الكامل بناءً على تقرير الأداء
-        gender: gender,
-        birthdate: birthdate,
-        avatar_url: avatar_url,
+      await saveOwnProfile(userId, {
+        username,
+        full_name: username,
+        gender,
+        birthdate,
+        avatar_url,
       });
-
-      if (error) throw error; // رمي الخطأ للـ catch
 
       // 3. النجاح التام
       onComplete();
