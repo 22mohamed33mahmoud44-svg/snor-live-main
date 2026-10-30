@@ -47,6 +47,9 @@ jobs:
       - name: Check broadcaster and viewer chat draft safety
         run: node --test tests/unit/liveStreamChatWiring.test.mjs
 
+      - name: Prevent indefinite viewer stream connection loading
+        run: node --test tests/unit/viewerStreamConnectionWiring.test.mjs
+
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
