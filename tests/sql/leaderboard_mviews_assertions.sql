@@ -18,7 +18,7 @@ BEGIN
       RAISE EXCEPTION 'Server-side leaderboard access removed from %',v_table;
     END IF;
   END LOOP;
-END
+END;
 $checks$;
 
 SET ROLE anon;
@@ -30,7 +30,7 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
   END;
-END
+END;
 $check_anon$;
 RESET ROLE;
 
@@ -43,7 +43,7 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
   END;
-END
+END;
 $check_auth$;
 RESET ROLE;
 
