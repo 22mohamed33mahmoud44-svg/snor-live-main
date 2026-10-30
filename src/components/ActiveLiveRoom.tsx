@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from '
 import { supabase } from '../supabase';
 import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
 import { createCallMessageSender } from '../utils/callMessageSender';
+import { mergeStreamChatHistory } from '../utils/mergeStreamChatHistory';
 import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
@@ -23,6 +24,7 @@ interface ChatMessage {
   text: string;
   color: string;
   isOptimistic?: boolean;
+  created_at?: string;
 }
 
 interface GiftToast {
@@ -46,6 +48,7 @@ type StreamChatMessage = {
   user_id: string;
   username: string;
   message: string;
+  created_at?: string;
 };
 
 const styles = {
@@ -664,11 +667,18 @@ export default function ActiveLiveRoom({
   // ── دورة حياة البث + Realtime ──
   useEffect(() => {
     if (!streamId) return;
+    let isMounted = true;
     startHeartbeat();
 
-    supabase.from('stream_chat').select('*').eq('stream_id', streamId).order('created_at', { ascending: true }).limit(MESSAGES_LIMIT)
+    supabase.from('stream_chat').select('*').eq('stream_id', streamId).order('created_at', { ascending: false }).limit(MESSAGES_LIMIT)
       .then(({ data }) => {
-        if (data) setChatMessages(data.map(m => ({ id: m.id, user: m.username, userId: m.user_id, text: m.message, color: m.user_id === myUserId ? '#ff2a74' : '#00d4ff' })));
+        if (!isMounted || !data) return;
+        const recentHistory: ChatMessage[] = data.slice().reverse().map(m => ({
+          id: m.id, user: m.username, userId: m.user_id, text: m.message,
+          color: m.user_id === myUserId ? '#ff2a74' : '#00d4ff',
+          created_at: m.created_at,
+        }));
+        setChatMessages(current => mergeStreamChatHistory(recentHistory, current, MESSAGES_LIMIT));
       });
 
     const roomChannel = supabase.channel(`room-${streamId}`, { config: { presence: { key: myUserId } } });
@@ -684,7 +694,8 @@ export default function ActiveLiveRoom({
 
           return [...withoutOptimistic.slice(-(MESSAGES_LIMIT - 1)), {
             id: newMsg.id, user: newMsg.username, userId: newMsg.user_id, text: newMsg.message,
-            color: newMsg.user_id === myUserId ? '#ff2a74' : '#60a5fa', isOptimistic: false,
+            color: newMsg.user_id === myUserId ? '#ff2a74' : '#60a5fa',
+            created_at: newMsg.created_at, isOptimistic: false,
           }];
         });
       })
@@ -724,6 +735,7 @@ export default function ActiveLiveRoom({
     window.addEventListener('beforeunload', stopHeartbeat);
 
     return () => {
+      isMounted = false;
       stopHeartbeat();
       supabase.removeChannel(roomChannel);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
