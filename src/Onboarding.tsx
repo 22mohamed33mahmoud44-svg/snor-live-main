@@ -8,10 +8,12 @@ interface OnboardingData {
 }
 
 interface OnboardingProps {
-  onComplete: (data: OnboardingData) => void;
+  onComplete: (data: OnboardingData) => Promise<void>;
+  error?: string | null;
 }
 
-export default function Onboarding({ onComplete }: OnboardingProps) {
+export default function Onboarding({ onComplete, error }: OnboardingProps) {
+  const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState(1); // 1=birthdate, 2=gender, 3=lookingFor, 4=photo
   const [data, setData] = useState<OnboardingData>({
     birthdate:    '',
@@ -39,9 +41,19 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     return true; // photo is optional
   };
 
-  const next = () => {
-    if (step < totalSteps) setStep(s => s + 1);
-    else onComplete(data);
+  const next = async () => {
+    if (submitting || !canProceed()) return;
+    if (step < totalSteps) {
+      setStep(s => s + 1);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await onComplete(data);
+    } finally {
+      // On failure the parent keeps onboarding visible and displays error.
+      setSubmitting(false);
+    }
   };
   const back = () => setStep(s => s - 1);
 
@@ -216,19 +228,21 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           {renderStep()}
         </div>
 
+        {error && <p role="alert" aria-live="polite" style={{ color: '#f87171', textAlign: 'center' }}>{error}</p>}
+
         {/* Navigation */}
         <div style={styles.navRow}>
           {step > 1 && (
-            <button onClick={back} style={styles.backBtn}>← رجوع</button>
+            <button onClick={back} disabled={submitting} style={styles.backBtn}>← رجوع</button>
           )}
 
           {step === 4 && (
-            <button onClick={next} style={styles.skipBtn}>تخطي</button>
+            <button onClick={() => { void next(); }} disabled={submitting} style={styles.skipBtn}>تخطي</button>
           )}
 
           <button
-            onClick={next}
-            disabled={!canProceed()}
+            onClick={() => { void next(); }}
+            disabled={!canProceed() || submitting}
             style={{
               ...styles.nextBtn,
               opacity:       canProceed() ? 1 : 0.35,
@@ -237,7 +251,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               marginLeft:    step > 1 ? 0 : 'auto',
             }}
           >
-            {step === totalSteps ? '🚀 ابدأ' : 'التالي →'}
+            {submitting ? 'جاري حفظ الملف...' : step === totalSteps ? '🚀 ابدأ' : 'التالي →'}
           </button>
         </div>
       </div>
