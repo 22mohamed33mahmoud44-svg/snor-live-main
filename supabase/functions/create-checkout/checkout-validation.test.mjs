@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PACKAGE_IDS, buildCheckoutRedirects, parseCheckoutPackage, resolveCheckoutPrice } from './checkout-validation.mjs';
+import { PACKAGE_IDS, buildCheckoutRedirects, checkoutDisplayDetails, parseCheckoutPackage, resolveCheckoutPrice } from './checkout-validation.mjs';
 
 const prices = Object.freeze({
   pkg_100: 'price_test_100',
@@ -60,4 +60,38 @@ test('rejects untrusted or invalid configured app origins', () => {
     buildCheckoutRedirects('http://localhost:5173').cancelUrl,
     'http://localhost:5173/?payment=cancelled',
   );
+});
+
+test('returns the exact amount and currency from Stripe Checkout Session', () => {
+  const details = checkoutDisplayDetails({
+    id: 'cs_test_verified',
+    url: 'https://checkout.stripe.com/c/pay/cs_test_verified',
+    amount_total: 4500,
+    currency: 'egp',
+  });
+  assert.deepEqual(details, {
+    session_id: 'cs_test_verified',
+    checkout_url: 'https://checkout.stripe.com/c/pay/cs_test_verified',
+    amount_total: 4500,
+    currency: 'EGP',
+  });
+});
+
+test('will not quote invented, free, missing or untrusted checkout prices', () => {
+  const base = {
+    id: 'cs_test_valid',
+    url: 'https://checkout.stripe.com/c/pay/test',
+    amount_total: 4500,
+    currency: 'egp',
+  };
+  for (const changed of [
+    { amount_total: null }, { amount_total: undefined }, { amount_total: '4500' },
+    { amount_total: -10 }, { amount_total: 0 }, { amount_total: 1.5 },
+    { currency: null }, { currency: 'EGP
+' }, { currency: 'invalid' },
+    { url: 'http://checkout.stripe.com/pay/test' },
+    { url: 'javascript:alert(1)' }, { url: 'https://admin:password@checkout.stripe.com' },
+  ]) {
+    assert.equal(checkoutDisplayDetails({ ...base, ...changed }), null);
+  }
 });
