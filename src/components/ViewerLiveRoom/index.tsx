@@ -112,7 +112,11 @@ export default function ViewerLiveRoom({
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [mediaConnected, setMediaConnected] = useState(false);
-  const suppressDisconnectRef = useRef(false);
+  // Every rendered LiveKit room has a unique identity. A late disconnect
+  // from an already-unmounted room must not damage a newer connection.
+  const roomAttemptId = `${streamId}-${myUsername}-${connectionAttempt}`;
+  const activeRoomAttemptRef = useRef(roomAttemptId);
+  activeRoomAttemptRef.current = roomAttemptId;
 
   // مراجع لتحسين الأداء (Ref)
   const roomChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -191,9 +195,7 @@ export default function ViewerLiveRoom({
         if (funcError || !data?.token) {
           throw funcError ?? new Error('No live stream token returned');
         }
-        // The old room was unmounted before this new token can connect.
-        // Re-enable error handling so retry attempts fail promptly if needed.
-        suppressDisconnectRef.current = false;
+        // A canceled/older request must never install a room token.
         setLiveKitToken(data.token);
       } catch (error) {
         if (isCancelled) return;
@@ -211,24 +213,23 @@ export default function ViewerLiveRoom({
     };
   }, [streamId, myUsername, connectionAttempt]);
 
-  const handleMediaConnected = useCallback(() => {
-    suppressDisconnectRef.current = false;
+  const handleMediaConnected = useCallback((attemptId: string) => {
+    if (activeRoomAttemptRef.current !== attemptId) return;
     setMediaConnected(true);
     setConnectionError(null);
   }, []);
 
-  const handleMediaError = useCallback((error: Error) => {
+  const handleMediaError = useCallback((attemptId: string, error: Error) => {
+    if (activeRoomAttemptRef.current !== attemptId) return;
     console.error('LiveKit viewer connection failed:', error);
-    if (!suppressDisconnectRef.current) {
-      setConnectionError('تعذر الاتصال بخادم البث. حاول إعادة الاتصال.');
-    }
+    setMediaConnected(false);
+    setConnectionError('تعذر الاتصال بخادم البث. حاول إعادة الاتصال.');
   }, []);
 
-  const handleMediaDisconnected = useCallback(() => {
-    if (!suppressDisconnectRef.current) {
-      setMediaConnected(false);
-      setConnectionError('انقطع الاتصال بالبث. حاول إعادة الاتصال.');
-    }
+  const handleMediaDisconnected = useCallback((attemptId: string) => {
+    if (activeRoomAttemptRef.current !== attemptId) return;
+    setMediaConnected(false);
+    setConnectionError('انقطع الاتصال بالبث. حاول إعادة الاتصال.');
   }, []);
 
   // Catch silent room-connection stalls that emit no error event.
@@ -241,12 +242,14 @@ export default function ViewerLiveRoom({
   }, [liveKitToken, mediaConnected, connectionError]);
 
   const retryConnection = useCallback(() => {
-    suppressDisconnectRef.current = true;
+    // Invalidate callbacks synchronously BEFORE unmounting the old room.
+    // Otherwise its onDisconnected can overwrite the fresh retry's state.
+    activeRoomAttemptRef.current = `${streamId}-${myUsername}-${connectionAttempt + 1}`;
     setConnectionError(null);
     setMediaConnected(false);
     setLiveKitToken(null);
     setConnectionAttempt(attempt => attempt + 1);
-  }, []);
+  }, [streamId, myUsername, connectionAttempt]);
 
   const spawnHeart = useCallback((clientX?: number, emoji?: string) => {
     const heart: FloatingHeart = {
@@ -542,10 +545,10 @@ export default function ViewerLiveRoom({
             </div>
           ) : liveKitToken ? (
             <LiveKitRoom
-              key={`${streamId}-${connectionAttempt}`}
-              onConnected={handleMediaConnected}
-              onDisconnected={handleMediaDisconnected}
-              onError={handleMediaError}
+              key={roomAttemptId}
+              onConnected={() => handleMediaConnected(roomAttemptId)}
+              onDisconnected={() => handleMediaDisconnected(roomAttemptId)}
+              onError={(error) => handleMediaError(roomAttemptId, error)}
               video={false}
               // Viewers subscribe to broadcaster tracks; they must never
               // request/publish microphone or camera tracks themselves.
