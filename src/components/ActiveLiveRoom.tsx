@@ -4,6 +4,7 @@ import { supabase } from '../supabase';
 import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
 import { createCallMessageSender } from '../utils/callMessageSender';
 import { createCancelableMediaCapture } from '../utils/cancelableMediaCapture';
+import { addStreamLikeBatch, reconcileStreamLikeSnapshot } from '../utils/streamLikeCounter';
 import { mergeStreamChatHistory } from '../utils/mergeStreamChatHistory';
 import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
@@ -728,8 +729,12 @@ export default function ActiveLiveRoom({
           }];
         });
       })
-      .on('broadcast', { event: 'like' }, () => setLikesCount(prev => prev + 1))
-      .on('broadcast', { event: 'like_batch' }, ({ payload }) => setLikesCount(prev => prev + (payload?.count || 1)))
+      .on('broadcast', { event: 'like' }, () => {
+        if (isMounted) setLikesCount(prev => addStreamLikeBatch(prev, 1));
+      })
+      .on('broadcast', { event: 'like_batch' }, ({ payload }) => {
+        if (isMounted) setLikesCount(prev => addStreamLikeBatch(prev, payload?.count));
+      })
       .on('broadcast', { event: 'gift' }, ({ payload }) => {
         setGiftToast({ id: Date.now() + Math.random(), senderName: payload?.senderName, emoji: payload?.emoji, giftName: payload?.giftName });
       })
@@ -748,7 +753,10 @@ export default function ActiveLiveRoom({
       });
 
     supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data }) => {
-      if (data?.likes_count != null) setLikesCount(data.likes_count);
+      if (isMounted && data?.likes_count != null) {
+        // A delayed initial snapshot can be older than realtime like events.
+        setLikesCount(current => reconcileStreamLikeSnapshot(current, data.likes_count));
+      }
     });
 
     const handleVisibilityChange = () => {
