@@ -270,14 +270,16 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
       onEndRef.current();
     };
 
-    // An offline/slow status query may outlive multiple 3-second polling
-    // intervals. Keep one request in flight and ignore results after exit.
+    // Check match status at most once per polling period. The poller aborts
+    // an unresponsive PostgREST request after 12 seconds, so the next timer
+    // tick can recover without accumulating stale requests.
     const endStatusPoller = createMatchEndStatusPoller(
-      async () => {
+      async signal => {
         const { data, error } = await supabase
           .from('matches')
           .select('status')
           .eq('id', matchId)
+          .abortSignal(signal)
           .maybeSingle();
         return { data, error };
       },
