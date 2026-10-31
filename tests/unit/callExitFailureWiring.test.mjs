@@ -12,7 +12,7 @@ test('failed video token connection allows safe, retryable hangup on errors or r
   assert.match(failedExit, /setLeaving\(true\)/);
   assert.match(failedExit, /try \{[\s\S]*await endMatchOnServer\(matchId\)/);
   assert.match(failedExit, /catch \(error\) \{[\s\S]*setLeaveError\(/);
-  assert.match(failedExit, /finally \{[\s\S]*leavingRef\.current = false;[\s\S]*setLeaving\(false\)/);
+  assert.match(failedExit, /finally \{[\s\S]*leavingRef\.current = false;[\s\S]*if \(navigationGuard\.isActive\(\)\) setLeaving\(false\)/);
   assert.match(call, /disabled=\{leaving\} onClick=\{\(\) => \{ void leaveFailedCall\(\); \}\}/);
   assert.match(call, /\{leaveError && <p role="alert">/);
 });
@@ -23,7 +23,7 @@ test('normal call exit/next does not navigate until server confirms the match en
   assert.match(handler, /confirmedEnded = await endMatchOnServer\(matchId\)/);
   assert.match(handler, /if \(!confirmedEnded\) \{[\s\S]*setEndError\(/);
   assert.match(handler, /catch \(error\) \{[\s\S]*setEndError\(/);
-  assert.match(handler, /finally \{[\s\S]*if \(!confirmedEnded\) endingRef\.current = false/);
+  assert.match(handler, /finally \{[\s\S]*if \(!confirmedEnded && navigationGuard\.isActive\(\)\) endingRef\.current = false/);
   assert.ok(handler.indexOf('if (!confirmedEnded)') < handler.indexOf('onNext()'),
     'navigation happens without verifying server end');
   assert.match(call, /\{endError && <p className="vc-media-error" role="alert">\{endError\}<\/p>\}/);
