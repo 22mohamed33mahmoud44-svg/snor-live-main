@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../../supabase';
 import { createCallMessageSender } from '../../utils/callMessageSender';
 import { createStreamLikeBatcher } from '../../utils/streamLikeBatcher';
+import { addStreamLikeBatch, reconcileStreamLikeSnapshot, safeStreamLikeBatchCount } from '../../utils/streamLikeCounter';
 import { acknowledgeStreamChatMessage, mergeStreamChatHistory } from '../../utils/mergeStreamChatHistory';
 import { motion, AnimatePresence } from 'framer-motion';
 // تم إزالة الأيقونة 'X' غير المستخدمة لتنظيف الكود
@@ -330,13 +331,15 @@ export default function ViewerLiveRoom({
       // استقبال دفعة الإعجابات (Batching) لحماية الواجهة من الانهيار
       .on('broadcast', { event: 'like_batch' }, ({ payload }) => {
         if (!isMounted) return;
-        const count = payload?.count || 1;
-        setLikesCount(prev => prev + count);
-        
-        // رسم قلبين كحد أقصى لتخفيف العبء على معالج الموبايل
-        const heartsToSpawn = Math.min(count, 2); 
-        for(let i = 0; i < heartsToSpawn; i++) {
-          setTimeout(() => spawnHeart(), i * 200);
+        const count = safeStreamLikeBatchCount(payload?.count);
+        if (count === 0) return;
+        setLikesCount(prev => addStreamLikeBatch(prev, count));
+
+        // Spawn at most two hearts; never allocate animations according to
+        // an untrusted broadcast payload.
+        const heartsToSpawn = Math.min(count, 2);
+        for (let i = 0; i < heartsToSpawn; i++) {
+          safeTimeout(() => { if (isMounted) spawnHeart(); }, i * 200);
         }
       })
       .on('broadcast', { event: 'gift' }, ({ payload }) => {
@@ -362,7 +365,10 @@ export default function ViewerLiveRoom({
       });
 
     supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data }) => {
-      if (isMounted && data?.likes_count != null) setLikesCount(data.likes_count);
+      if (isMounted && data?.likes_count != null) {
+        // A late snapshot must not overwrite newer local taps/broadcasts.
+        setLikesCount(current => reconcileStreamLikeSnapshot(current, data.likes_count));
+      }
     });
 
     return () => {
@@ -435,7 +441,7 @@ export default function ViewerLiveRoom({
 
   // 🚀 دالة الإعجاب المحسنة (لا ترسل للسيرفر، تضيف للذاكرة فقط)
   const sendLike = useCallback((clientX?: number) => {
-    setLikesCount(prev => prev + 1);
+    setLikesCount(prev => addStreamLikeBatch(prev, 1));
     spawnHeart(clientX);
     likeBatcher.add();
   }, [spawnHeart, likeBatcher]);
