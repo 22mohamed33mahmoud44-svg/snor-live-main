@@ -71,6 +71,9 @@ jobs:
       - name: Check broadcaster token and publishing recovery
         run: node --test tests/unit/broadcasterConnectionRecovery.test.mjs
 
+      - name: Ignore stale broadcaster publishing and LiveKit callbacks on reconnect
+        run: node --test tests/unit/broadcasterStaleRoomCallbacks.test.mjs
+
       - name: Ensure broadcaster media capture stops on unmount and handles permission failures
         run: node --test tests/unit/broadcasterCameraLifecycleWiring.test.mjs
 
