@@ -47,6 +47,9 @@ jobs:
       - name: Confirm outgoing call chat messages appear without a Realtime echo
         run: node --test tests/unit/callChatSavedAckWiring.test.mjs
 
+      - name: Keep uncertain call chat IDs across same-tab refresh without storing message text
+        run: node --test tests/unit/sessionCallChatAttemptWiring.test.mjs
+
       - name: Verify timed call setup and fresh LiveKit retry wiring
         run: node --test tests/unit/videoCallConnectionTimeout.test.mjs
 
@@ -606,6 +609,9 @@ jobs:
 
       - name: Prevent duplicate call chat when an insert commits but its response is lost
         run: deno test tests/unit/idempotentCallChatWriter.test.ts
+
+      - name: Reuse pending chat UUID after refresh and expire stored retry metadata
+        run: deno test tests/unit/sessionCallChatAttemptStore.test.ts
 
       - name: Merge history with new and pending live stream chat safely
         run: deno test tests/unit/mergeStreamChatHistory.test.ts
