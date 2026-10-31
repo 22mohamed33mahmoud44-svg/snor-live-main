@@ -4,12 +4,18 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../../src/VideoCall.tsx', import.meta.url), 'utf8');
 
-test('call chat insert returns the full persisted row rather than waiting for an echo', () => {
-  assert.match(source, /createCallMessageSender<CallChatMessage>\(async \(message\) => \{/);
-  assert.match(source, /\.from\('messages'\)\.insert\(\{\s*match_id: matchId, sender_id: userId, message,/);
-  assert.match(source, /\.select\('id, sender_id, message, created_at'\)\.single\(\)/);
-  assert.match(source, /!data\?\.id \? new Error\('Missing saved call chat message ID'\)/,
-    'successful insert without confirmed ID must not clear the draft');
+test('call chat insert uses a stable UUID and verifies server confirmation', () => {
+  assert.match(source, /createIdempotentCallChatWriter<CallChatMessage>\(/);
+  assert.match(source, /\(\) => crypto\.randomUUID\(\)/);
+  assert.match(source, /\.from\('messages'\)\.upsert\(\{/);
+  assert.match(source, /id, match_id: matchId, sender_id: userId, message/);
+  assert.match(source, /onConflict: 'id', ignoreDuplicates: true/);
+  assert.match(source, /\.select\('id, sender_id, message, created_at'\)/);
+  assert.match(source, /\.maybeSingle\(\)/);
+  assert.match(source, /\.eq\('id', id\)/);
+  assert.match(source, /\.eq\('match_id', matchId\)/);
+  assert.match(source, /\.eq\('sender_id', userId\)/);
+  assert.match(source, /createCallMessageSender<CallChatMessage>\(message => writer\.persist\(message\)\)/);
 });
 
 test('outgoing saved row is merged into chat by server ID and does not clear newer text', () => {
