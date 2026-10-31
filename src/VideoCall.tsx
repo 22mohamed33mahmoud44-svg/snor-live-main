@@ -7,6 +7,8 @@ import { beginTimedCallTokenRequest } from './utils/timedCallTokenRequest';
 import { LiveKitRoom, RoomAudioRenderer, StartAudio, TrackToggle, useLocalParticipant, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
+type CallChatMessage = { id: string; sender_id: string; message: string; created_at?: string | null };
+
 type Props = {
   userId: string;
   matchId: string;
@@ -190,7 +192,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   const { isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
   const camOff = !isCameraEnabled;
   const [duration, setDuration] = useState(0);
-  const [messages, setMessages] = useState<{ id: string; sender_id: string; message: string; created_at?: string | null }[]>([]);
+  const [messages, setMessages] = useState<CallChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
@@ -262,7 +264,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
           return;
         }
         if (data) {
-          setMessages(current => mergeStreamChatHistory(
+          setMessages(current => mergeStreamChatHistory<CallChatMessage>(
             data.slice().reverse(), current, CALL_CHAT_HISTORY_LIMIT,
           ));
         }
@@ -277,8 +279,8 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
         filter: `match_id=eq.${matchId}`,
       }, payload => {
         if (disposed) return;
-        const incoming = payload.new as { id: string; sender_id: string; message: string; created_at?: string | null };
-        setMessages(prev => mergeStreamChatHistory([incoming], prev, CALL_CHAT_HISTORY_LIMIT));
+        const incoming = payload.new as CallChatMessage;
+        setMessages(prev => mergeStreamChatHistory<CallChatMessage>([incoming], prev, CALL_CHAT_HISTORY_LIMIT));
         if (incoming.sender_id !== userId) setNewMsg(true);
       })
       .on('postgres_changes', {
