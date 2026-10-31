@@ -604,6 +604,9 @@ jobs:
       - name: Deduplicate persisted outgoing call messages across Realtime and history
         run: deno test tests/unit/callChatSavedAck.test.ts
 
+      - name: Prevent duplicate call chat when an insert commits but its response is lost
+        run: deno test tests/unit/idempotentCallChatWriter.test.ts
+
       - name: Merge history with new and pending live stream chat safely
         run: deno test tests/unit/mergeStreamChatHistory.test.ts
 
