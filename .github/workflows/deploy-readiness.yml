@@ -41,6 +41,9 @@ jobs:
       - name: Check safe retry for failed-call exit and active-call hangup
         run: node --test tests/unit/callExitFailureWiring.test.mjs
 
+      - name: Restore call chat history after reconnect without losing live messages
+        run: node --test tests/unit/callChatHistoryWiring.test.mjs
+
       - name: Verify timed call setup and fresh LiveKit retry wiring
         run: node --test tests/unit/videoCallConnectionTimeout.test.mjs
 
@@ -591,6 +594,9 @@ jobs:
 
       - name: Keep call-chat drafts on failed message sends
         run: deno test tests/unit/callMessageSender.test.ts
+
+      - name: Merge latest call chat messages with in-flight Realtime traffic
+        run: deno test tests/unit/callChatHistory.test.ts
 
       - name: Merge history with new and pending live stream chat safely
         run: deno test tests/unit/mergeStreamChatHistory.test.ts
