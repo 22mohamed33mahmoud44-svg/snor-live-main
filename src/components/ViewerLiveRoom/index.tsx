@@ -292,25 +292,34 @@ export default function ViewerLiveRoom({
     const currentMyUserId = identityRef.current.myUserId;
 
     const fetchOldMessages = async () => {
-      const { data, error } = await supabase
-        .from('stream_chat')
-        .select('*')
-        .eq('stream_id', streamId)
-        .order('created_at', { ascending: false })
-        .limit(MESSAGES_LIMIT);
+      try {
+        const { data, error } = await supabase
+          .from('stream_chat')
+          .select('*')
+          .eq('stream_id', streamId)
+          .order('created_at', { ascending: false })
+          .limit(MESSAGES_LIMIT);
 
-      if (error) {
-        if (isMounted) showToast('تعذر تحميل الرسائل القديمة');
-        return;
-      }
-      if (data && isMounted) {
-        const recentHistory: ChatMessage[] = data.slice().reverse().map(m => ({
-          id: m.id, stream_id: m.stream_id, user_id: m.user_id,
-          username: m.username, message: m.message, created_at: m.created_at,
-        }));
-        // A Realtime INSERT or local pending send can arrive before the
-        // historical query resolves. Do not overwrite those messages.
-        setMessages(current => mergeStreamChatHistory(recentHistory, current, MESSAGES_LIMIT));
+        if (error) {
+          if (isMounted) showToast('تعذر تحميل الرسائل القديمة');
+          return;
+        }
+        if (data && isMounted) {
+          const recentHistory: ChatMessage[] = data.slice().reverse().map(m => ({
+            id: m.id, stream_id: m.stream_id, user_id: m.user_id,
+            username: m.username, message: m.message, created_at: m.created_at,
+          }));
+          // Merge messages received during the query, or acknowledged
+          // locally, rather than replacing them with a stale snapshot.
+          setMessages(current => mergeStreamChatHistory(recentHistory, current, MESSAGES_LIMIT));
+        }
+      } catch (error) {
+        // Network rejects also happen during Realtime reconnect. Do not let
+        // a rejected history fetch become an unhandled promise rejection.
+        if (isMounted) {
+          console.warn('Viewer chat history request failed:', error);
+          showToast('تعذر تحميل الرسائل القديمة');
+        }
       }
     };
 
