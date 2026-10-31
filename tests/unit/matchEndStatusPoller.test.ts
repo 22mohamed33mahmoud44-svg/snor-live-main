@@ -164,7 +164,7 @@ Deno.test('disposing an unresponsive fetch aborts it and resolves the in-flight 
     signal => {
       controllerSignal = signal;
       callCount++;
-      return new Promise(() => {}); // an uncooperative network stack
+      return new Promise<null>(() => {}); // an uncooperative network stack
     },
     () => { ended++; },
     60_000,
