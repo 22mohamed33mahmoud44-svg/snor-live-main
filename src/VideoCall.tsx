@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { supabase } from './supabase';
 import { endMatchOnServer } from './utils/endMatchOnServer';
 import { createCallMessageSender } from './utils/callMessageSender';
+import { mergeStreamChatHistory } from './utils/mergeStreamChatHistory';
 import { beginTimedCallTokenRequest } from './utils/timedCallTokenRequest';
 import { LiveKitRoom, RoomAudioRenderer, StartAudio, TrackToggle, useLocalParticipant, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
@@ -14,6 +15,7 @@ type Props = {
   onNext: () => void;
 };
 
+const CALL_CHAT_HISTORY_LIMIT = 30;
 const SFX_CONNECTING = 'https://assets.mixkit.co/active_storage/sfx/2568/2568-84.wav';
 const SFX_END = 'https://assets.mixkit.co/active_storage/sfx/2564/2564-84.wav';
 const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
@@ -188,7 +190,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   const { isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
   const camOff = !isCameraEnabled;
   const [duration, setDuration] = useState(0);
-  const [messages, setMessages] = useState<{ id: string; sender_id: string; message: string }[]>([]);
+  const [messages, setMessages] = useState<{ id: string; sender_id: string; message: string; created_at?: string | null }[]>([]);
   const [input, setInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
@@ -244,13 +246,39 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
       }
     };
 
+    // Only query this match after Realtime has subscribed. Fetching before
+    // subscribing leaves a gap in which a message could be persisted but
+    // neither included in the snapshot nor delivered through Realtime.
+    const fetchRecentMessages = async () => {
+      try {
+        const { data, error } = await supabase.from('messages')
+          .select('id, sender_id, message, created_at')
+          .eq('match_id', matchId)
+          .order('created_at', { ascending: false })
+          .limit(CALL_CHAT_HISTORY_LIMIT);
+        if (disposed) return;
+        if (error) {
+          console.error('Unable to load call chat history:', error);
+          return;
+        }
+        if (data) {
+          setMessages(current => mergeStreamChatHistory(
+            data.slice().reverse(), current, CALL_CHAT_HISTORY_LIMIT,
+          ));
+        }
+      } catch (error) {
+        if (!disposed) console.error('Call chat history load failed:', error);
+      }
+    };
+
     const channel = supabase.channel(`vc-chat-match-${matchId}`)
       .on('postgres_changes', {
         event: 'INSERT', schema: 'public', table: 'messages',
         filter: `match_id=eq.${matchId}`,
       }, payload => {
-        const incoming = payload.new as { id: string; sender_id: string; message: string };
-        setMessages(prev => prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming]);
+        if (disposed) return;
+        const incoming = payload.new as { id: string; sender_id: string; message: string; created_at?: string | null };
+        setMessages(prev => mergeStreamChatHistory([incoming], prev, CALL_CHAT_HISTORY_LIMIT));
         if (incoming.sender_id !== userId) setNewMsg(true);
       })
       .on('postgres_changes', {
@@ -260,7 +288,9 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
         const match = payload.new as { status?: string };
         if (match.status === 'ended') handleEnded();
       })
-      .subscribe();
+      .subscribe(status => {
+        if (status === 'SUBSCRIBED' && !disposed) void fetchRecentMessages();
+      });
 
     void checkEnded();
     const poll = setInterval(() => { void checkEnded(); }, 3000);
