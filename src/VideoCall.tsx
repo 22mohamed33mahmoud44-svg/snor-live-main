@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 import { endMatchOnServer } from './utils/endMatchOnServer';
 import { createCallMessageSender } from './utils/callMessageSender';
 import { createIdempotentCallChatWriter } from './utils/idempotentCallChatWriter';
+import { createSessionCallChatAttemptStore } from './utils/sessionCallChatAttemptStore';
 import { mergeStreamChatHistory } from './utils/mergeStreamChatHistory';
 import { beginTimedCallTokenRequest } from './utils/timedCallTokenRequest';
 import { LiveKitRoom, RoomAudioRenderer, StartAudio, TrackToggle, useLocalParticipant, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
@@ -198,6 +199,14 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   const [sendingMessage, setSendingMessage] = useState(false);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
   const messageSender = useMemo(() => {
+    // sessionStorage is tab-scoped and contains only the pending UUID and
+    // draft fingerprint, never message content. Some browsers block storage.
+    let sessionStorageForCall: Storage | null = null;
+    try { sessionStorageForCall = window.sessionStorage; } catch { /* private/blocked storage */ }
+    const attemptStore = createSessionCallChatAttemptStore(
+      sessionStorageForCall,
+      `snor:call-chat-pending:${matchId}:${userId}`,
+    );
     const writer = createIdempotentCallChatWriter<CallChatMessage>(
       () => crypto.randomUUID(),
       async (id, message) => {
@@ -221,6 +230,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
           .maybeSingle();
         return { data, error };
       },
+      attemptStore,
     );
     return createCallMessageSender<CallChatMessage>(message => writer.persist(message));
   }, [matchId, userId]);
