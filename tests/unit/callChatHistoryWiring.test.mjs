@@ -19,7 +19,7 @@ test('reconnected calls query the most recent 30 messages for that match only', 
   assert.match(history, /\.order\('created_at', \{ ascending: false \}\)/);
   assert.match(history, /\.limit\(CALL_CHAT_HISTORY_LIMIT\)/);
   assert.match(history, /if \(disposed\) return/);
-  assert.match(history, /setMessages\(current => mergeStreamChatHistory\(\s*data\.slice\(\)\.reverse\(\), current, CALL_CHAT_HISTORY_LIMIT/);
+  assert.match(history, /setMessages\(current => mergeStreamChatHistory<CallChatMessage>\(\s*data\.slice\(\)\.reverse\(\), current, CALL_CHAT_HISTORY_LIMIT/);
   assert.doesNotMatch(history, /setMessages\(data\)/,
     'late history responses must not overwrite new chat messages');
 });
@@ -31,7 +31,7 @@ test('history is loaded after Realtime subscription to avoid snapshot/subscribe 
   assert.match(section, /event: 'INSERT', schema: 'public', table: 'messages'/);
   assert.match(section, /filter: `match_id=eq\.\$\{matchId\}`/);
   assert.match(section, /if \(disposed\) return;\s*const incoming = payload\.new/);
-  assert.match(section, /setMessages\(prev => mergeStreamChatHistory\(\[incoming\], prev, CALL_CHAT_HISTORY_LIMIT\)\)/);
+  assert.match(section, /setMessages\(prev => mergeStreamChatHistory<CallChatMessage>\(\[incoming\], prev, CALL_CHAT_HISTORY_LIMIT\)\)/);
   assert.match(call, /clearInterval\(poll\);\s*void supabase\.removeChannel\(channel\)/);
 });
 
