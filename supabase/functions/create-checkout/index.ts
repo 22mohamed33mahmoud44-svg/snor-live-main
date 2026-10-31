@@ -8,10 +8,10 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, {
-  apiVersion: "2023-10-16",
-  httpClient: Stripe.createFetchHttpClient(),
-});
+// Provider selection is deferred. Keep checkout disabled at the server even
+// if a browser bypasses the BuyCoins screen; an explicit reviewed release
+// must update this switch before any real checkout can begin.
+const PAYMENT_CHECKOUT_RELEASED = false;
 
 const PRICE_IDS: Record<string, string | undefined> = {
   pkg_100: Deno.env.get("STRIPE_PRICE_100_COINS"),
@@ -30,7 +30,18 @@ Deno.serve(async (req) => {
     });
   }
 
+  if (!PAYMENT_CHECKOUT_RELEASED) {
+    return new Response(JSON.stringify({ error: "Payment checkout is temporarily unavailable" }), {
+      status: 503,
+      headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
+    });
+  }
+
   try {
+    const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, {
+      apiVersion: "2023-10-16",
+      httpClient: Stripe.createFetchHttpClient(),
+    });
     const authHeader = req.headers.get("Authorization") ?? "";
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
