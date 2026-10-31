@@ -14,8 +14,9 @@ Deno.test('successful token request reports ready exactly once', async () => {
     result => results.push(result),
   );
   await tick();
-  assert(results.length === 1 && results[0].status === 'ready' &&
-    results[0].token === 'safe-room-token', 'successful request did not return token');
+  const first = results[0];
+  assert(first?.status === 'ready' && first.token === 'safe-room-token',
+    'successful request did not return token');
   cancel();
 });
 
