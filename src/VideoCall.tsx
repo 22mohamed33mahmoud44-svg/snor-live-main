@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { supabase } from './supabase';
 import { endMatchOnServer } from './utils/endMatchOnServer';
 import { createCallMessageSender } from './utils/callMessageSender';
+import { beginTimedCallTokenRequest } from './utils/timedCallTokenRequest';
 import { LiveKitRoom, RoomAudioRenderer, StartAudio, TrackToggle, useLocalParticipant, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
@@ -39,31 +40,42 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<ErrorType>(null);
   const [tokenLoading, setTokenLoading] = useState(true);
+  const [roomConnected, setRoomConnected] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
   const leavingRef = useRef(false);
 
+  // The Edge Function may never resolve. Bound token setup and ignore any
+  // response from a previous attempt after retry, unmount or match change.
   useEffect(() => {
-    let isMounted = true;
     setToken(null);
     setError(null);
+    setRoomConnected(false);
     setTokenLoading(true);
-    const fetchToken = async () => {
-      try {
-        const { data, error: reqError } = await supabase.functions.invoke('livekit-token', { body: { room: matchId, username: userId, isStreamer: true } });
-        if (reqError || !data?.token) throw reqError ?? new Error('LiveKit token was not returned');
-        if (isMounted) setToken(data.token);
-      } catch (err) {
-        console.error('LiveKit token request failed:', err);
-        if (isMounted) setError('connection_failed');
-      } finally {
-        if (isMounted) setTokenLoading(false);
-      }
-    };
-    void fetchToken();
-    return () => { isMounted = false; };
+    return beginTimedCallTokenRequest(
+      () => supabase.functions.invoke('livekit-token', {
+        body: { room: matchId, username: userId, isStreamer: true },
+      }),
+      20_000,
+      result => {
+        setTokenLoading(false);
+        if (result.status === 'ready') setToken(result.token);
+        else setError(result.status === 'timeout' ? 'connection_timeout' : 'connection_failed');
+      },
+    );
   }, [matchId, userId, retryKey]);
+
+  // Getting a token is not proof that LiveKit has actually connected.
+  // If the WebSocket/room connection stalls without an error event, display
+  // the same retry and safe-exit actions as other connection failures.
+  useEffect(() => {
+    if (!token || roomConnected || error) return;
+    const connectionTimeout = window.setTimeout(() => {
+      setError(previous => previous ?? 'connection_timeout');
+    }, 30_000);
+    return () => window.clearTimeout(connectionTimeout);
+  }, [token, roomConnected, error]);
 
   const leaveFailedCall = async () => {
     if (leavingRef.current) return;
@@ -86,8 +98,12 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
   };
 
   const retryConnection = () => {
+    if (leavingRef.current) return;
+    setLeaveError(null);
     setError(null);
     setToken(null);
+    setRoomConnected(false);
+    setTokenLoading(true);
     setRetryKey(key => key + 1);
   };
 
@@ -106,12 +122,18 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
 
   return (
     <LiveKitRoom
+      key={`${matchId}-${retryKey}`}
       token={token}
       serverUrl={import.meta.env.VITE_LIVEKIT_URL}
       connect={true}
       // These props configure initial publishing; live toggles use TrackToggle.
       video={callType === 'video'}
       audio={true}
+      onConnected={() => setRoomConnected(true)}
+      onDisconnected={() => {
+        setRoomConnected(false);
+        setError(previous => previous ?? 'connection_failed');
+      }}
       onError={(liveKitError) => setError(classifyLiveKitError(liveKitError))}
     >
       {/* Remote audio must be rendered for both video and audio-only calls.
