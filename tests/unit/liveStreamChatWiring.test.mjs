@@ -24,7 +24,7 @@ test('broadcaster waits for server confirmation before clearing the text draft',
 test('broadcaster rolls back the optimistic bubble on network/database failure', () => {
   assert.match(broadcaster, /createCallMessageSender<StreamChatMessage>\(async \(message: string\)/);
   assert.match(broadcaster, /await messageSender\.send\(text\)/);
-  assert.match(broadcaster, /if \(result\.status !== 'sent'\)/);
+  assert.match(broadcaster, /if \(result\.status !== 'sent' \|\| !result\.data\?\.id\)/);
   assert.match(broadcaster, /prev\.filter\(message => message\.id !== optimisticId\)/);
 });
 
