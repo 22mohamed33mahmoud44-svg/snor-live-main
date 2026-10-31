@@ -486,6 +486,11 @@ export default function ActiveLiveRoom({
   const [liveKitError, setLiveKitError]     = useState<string | null>(null);
   const [mediaPublished, setMediaPublished] = useState(false);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
+  // Room events and publisher callbacks belong to a specific attempt.
+  // Reconnection must never let stale events mark the new room LIVE/failed.
+  const roomAttemptId = `${streamId}-${connectionAttempt}`;
+  const activeRoomAttemptRef = useRef(roomAttemptId);
+  activeRoomAttemptRef.current = roomAttemptId;
 
   const videoRef            = useRef<HTMLVideoElement>(null);
   const streamRef           = useRef<MediaStream | null>(null);
@@ -493,7 +498,6 @@ export default function ActiveLiveRoom({
   const heartbeatRef        = useRef<ReturnType<typeof setInterval> | null>(null);
   const heartbeatRunning    = useRef(false);
   const endingRef          = useRef(false);
-  const ignoreDisconnectRef = useRef(false);
 
   const filtersList = [
     { id: 'natural',    effect: 'none' },
@@ -524,7 +528,6 @@ export default function ActiveLiveRoom({
         });
         if (cancelled) return;
         if (error || !data?.token) throw error ?? new Error('Missing broadcaster LiveKit token');
-        ignoreDisconnectRef.current = false;
         setLiveKitToken(data.token);
       } catch (error) {
         if (!cancelled) {
@@ -543,13 +546,14 @@ export default function ActiveLiveRoom({
     };
   }, [streamId, myUsername, connectionAttempt]);
 
-  const handleMediaPublished = useCallback(() => {
+  const handleMediaPublished = useCallback((attemptId: string) => {
+    if (activeRoomAttemptRef.current !== attemptId || endingRef.current) return;
     setMediaPublished(true);
     setLiveKitError(null);
   }, []);
 
-  const handleMediaFailure = useCallback((error: Error) => {
-    if (ignoreDisconnectRef.current || endingRef.current) return;
+  const handleMediaFailure = useCallback((attemptId: string, error: Error) => {
+    if (activeRoomAttemptRef.current !== attemptId || endingRef.current) return;
     console.error('Broadcaster LiveKit media failure:', error);
     setMediaPublished(false);
     setLiveKitError('تعذر توصيل الصوت أو الصورة للمشاهدين. أعد الاتصال أو أنهِ البث.');
@@ -559,13 +563,16 @@ export default function ActiveLiveRoom({
   useEffect(() => {
     if (!liveKitToken || mediaPublished || liveKitError) return;
     const watchdog = window.setTimeout(() => {
+      if (activeRoomAttemptRef.current !== roomAttemptId || endingRef.current) return;
       setLiveKitError('تأخر نشر البث للمشاهدين. جرّب إعادة الاتصال.');
     }, 35_000);
     return () => window.clearTimeout(watchdog);
-  }, [liveKitToken, mediaPublished, liveKitError]);
+  }, [liveKitToken, mediaPublished, liveKitError, roomAttemptId]);
 
   const retryMediaConnection = useCallback(() => {
-    ignoreDisconnectRef.current = true;
+    // Invalidate old LiveKitRoom/StreamPublisher callbacks BEFORE the old
+    // room is unmounted and its onDisconnected fires.
+    activeRoomAttemptRef.current = `${streamId}-${connectionAttempt + 1}`;
     setMediaPublished(false);
     setLiveKitError(null);
     setCaptureError(null);
@@ -574,7 +581,7 @@ export default function ActiveLiveRoom({
     // the camera itself failed. A token-only retry could never fix it.
     if (!initialStream && !cameraReady) setCameraAttempt(attempt => attempt + 1);
     setConnectionAttempt(attempt => attempt + 1);
-  }, [initialStream, cameraReady]);
+  }, [initialStream, cameraReady, streamId, connectionAttempt]);
 
   // ── Heartbeat ──
   const sendHeartbeat = useCallback(async () => {
@@ -946,23 +953,21 @@ export default function ActiveLiveRoom({
   if (liveKitToken && !broadcastProblem) {
     return (
       <LiveKitRoom
-        key={`${streamId}-${connectionAttempt}`}
+        key={roomAttemptId}
         token={liveKitToken}
         serverUrl={import.meta.env.VITE_LIVEKIT_URL}
         connect={true}
         video={false}
         audio={false}
-        onError={handleMediaFailure}
+        onError={(error) => handleMediaFailure(roomAttemptId, error)}
         onDisconnected={() => {
-          if (!ignoreDisconnectRef.current && !endingRef.current) {
-            handleMediaFailure(new Error('Broadcaster disconnected from LiveKit'));
-          }
+          handleMediaFailure(roomAttemptId, new Error('Broadcaster disconnected from LiveKit'));
         }}
       >
         <StreamPublisher
           stream={streamRef.current}
-          onPublished={handleMediaPublished}
-          onPublishError={handleMediaFailure}
+          onPublished={() => handleMediaPublished(roomAttemptId)}
+          onPublishError={(error) => handleMediaFailure(roomAttemptId, error)}
         />
         {roomContent}
       </LiveKitRoom>
