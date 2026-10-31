@@ -1,5 +1,18 @@
 # Production migration drift audit — read-only snapshot (2026-10-30)
 
+> **Updated 2026-10-31:** Supabase now records **42 applied migration versions**:
+> the 36-version frozen 2026-10-30 baseline documented below, plus six
+> separately applied, verified forward patches. See
+> [live_forward_patch_addendum_20261031.json](./live_forward_patch_addendum_20261031.json)
+> for the live version identifiers, original reviewed SQL file paths and MD5s.
+> The local `_021`–`_026` filenames use **different timestamps** from the
+> versions recorded live; **do not replay them, run `db push`, or use
+> `migration repair`** to align versions. Historical drift remains unresolved,
+> and the 36-version figures below describe the 2026-10-30 snapshot, not the
+> current database. Run `node scripts/check-live-forward-patches.mjs` to
+> verify reviewed SQL against that read-only addendum; the check is not an
+> end-to-end test or a replacement for future live migration-history audits.
+
 The baseline records migration versions, names, hashes and character counts from `supabase_migrations.schema_migrations`; it contains **no SQL to execute** and no customer data.
 
 | Category | Count |

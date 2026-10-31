@@ -104,6 +104,8 @@ jobs:
       - name: Ensure closing matchmaking cancels pending start and any late random match
         run: node --test tests/unit/randomMatchUnmountWiring.test.mjs
 
+      - name: Ensure payment checkout remains paused on frontend and server
+        run: node --test tests/unit/paymentLaunchGate.test.mjs
       - name: Test Stripe checkout input rules
         run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
 
@@ -112,6 +114,8 @@ jobs:
 
       - name: Verify recovered production migration archive integrity
         run: node scripts/check-production-history.mjs
+      - name: Verify six 2026-10-31 forward patch source hashes
+        run: node scripts/check-live-forward-patches.mjs
 
       - name: Verify security patches are in executable migration chain
         run: node scripts/check-security-migration-parity.mjs

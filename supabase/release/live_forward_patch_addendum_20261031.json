@@ -1,0 +1,54 @@
+{
+  "description": "Read-only metadata documenting six forward SQL patches applied to existing Supabase project on 2026-10-31. This is not a repair to the historical divergent migration chain.",
+  "project": "ogzrothtgxupawgjbioc",
+  "observed_on": "2026-10-31",
+  "baseline_file": "supabase/release/production_migration_inventory.json",
+  "baseline_applied_count": 36,
+  "live_applied_count_after_patches": 42,
+  "source": "supabase_migrations.schema_migrations; SQL statement text hashed with MD5 and measured in PostgreSQL characters",
+  "forward_applied": [
+    {
+      "applied_version": "20261031161854",
+      "name": "restrict_public_materialized_leaderboard_access",
+      "source_path": "supabase/migrations/20261030050000_025_protect_leaderboard_materialized_views.sql",
+      "recorded_md5": "d5b4d73b9131d0748d6a2be67b3960eb",
+      "recorded_chars": 1564
+    },
+    {
+      "applied_version": "20261031162106",
+      "name": "enable_secure_direct_call_invitations",
+      "source_path": "supabase/migrations/20261030010000_021_secure_direct_calls.sql",
+      "recorded_md5": "9c147c7285a283e39c79485d77c585cc",
+      "recorded_chars": 4971
+    },
+    {
+      "applied_version": "20261031162658",
+      "name": "enforce_server_gift_catalog_prices",
+      "source_path": "supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql",
+      "recorded_md5": "d6166b568874631398b1aaa57abf9eef",
+      "recorded_chars": 10314
+    },
+    {
+      "applied_version": "20261031162709",
+      "name": "restrict_anonymous_privileged_rpcs",
+      "source_path": "supabase/migrations/20261030040000_024_restrict_anonymous_rpc_execute.sql",
+      "recorded_md5": "92713ac09a4eac917bf523228ed8a11c",
+      "recorded_chars": 3410
+    },
+    {
+      "applied_version": "20261031162722",
+      "name": "lock_financial_table_browser_writes",
+      "source_path": "supabase/migrations/20261030060000_026_lock_financial_table_writes.sql",
+      "recorded_md5": "0d3635b61d24d812f12810974495837b",
+      "recorded_chars": 2376
+    },
+    {
+      "applied_version": "20261031162731",
+      "name": "scope_private_profiles_and_safe_discovery",
+      "source_path": "supabase/migrations/20261030030000_023_owner_profile_privacy.sql",
+      "recorded_md5": "d552978a971d86fb63f75e3b36f1aa83",
+      "recorded_chars": 2820
+    }
+  ],
+  "warning": "Do not replay source migration files by their original timestamps or execute supabase db push or migration repair. The six approved SQL bodies were applied under new versions after a divergent historical chain."
+}
