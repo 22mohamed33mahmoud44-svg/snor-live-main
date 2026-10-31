@@ -41,6 +41,9 @@ jobs:
       - name: Check safe retry for failed-call exit and active-call hangup
         run: node --test tests/unit/callExitFailureWiring.test.mjs
 
+      - name: Keep match status polls single-flight with cleanup on call exit
+        run: node --test tests/unit/matchEndStatusPollerWiring.test.mjs
+
       - name: Restore call chat history after reconnect without losing live messages
         run: node --test tests/unit/callChatHistoryWiring.test.mjs
 
@@ -588,6 +591,9 @@ jobs:
 
       - name: Verify ended matches despite network or database failures
         run: deno test tests/unit/confirmMatchEnded.test.ts
+
+      - name: Prevent overlapping match status reads and stale-ended callbacks
+        run: deno test tests/unit/matchEndStatusPoller.test.ts
 
       - name: Bound LiveKit token wait and ignore stale requests
         run: deno test tests/unit/timedCallTokenRequest.test.ts
