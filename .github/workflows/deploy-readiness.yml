@@ -59,6 +59,9 @@ jobs:
       - name: Verify viewer likes survive failed batch writes and exit
         run: node --test tests/unit/viewerLikeBatchWiring.test.mjs
 
+      - name: Prevent invalid like broadcasts and stale counter snapshots
+        run: node --test tests/unit/liveLikeCounterWiring.test.mjs
+
       - name: Prevent indefinite viewer stream connection loading
         run: node --test tests/unit/viewerStreamConnectionWiring.test.mjs
 
@@ -588,6 +591,9 @@ jobs:
 
       - name: Serialize viewer like RPCs and flush unsent likes on exit
         run: deno test tests/unit/streamLikeBatcher.test.ts
+
+      - name: Sanitize like batches and preserve newest visible like counts
+        run: deno test tests/unit/streamLikeCounter.test.ts
 
       - name: Stop camera and mic tracks from late browser permission grants
         run: deno test tests/unit/cancelableMediaCapture.test.ts
