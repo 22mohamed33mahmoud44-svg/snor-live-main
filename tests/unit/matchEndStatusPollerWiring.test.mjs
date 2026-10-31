@@ -29,7 +29,7 @@ test('unmount invalidates status callbacks before stopping timer and removing th
   assert.match(dispose, /void supabase\.removeChannel\(channel\)/);
   assert.match(watcher, /if \(disposed \|\| ended\) return Promise\.resolve\(\)/);
   assert.match(watcher, /\.then\(\(\) => disposed \|\| controller\.signal\.aborted \? null : readStatus\(controller\.signal\)\)/);
-  assert.match(watcher, /if \(disposed \|\| ended \|\| !result \|\| result\.error\) return;/);
+  assert.match(watcher, /if \(disposed \|\| ended \|\| controller\.signal\.aborted \|\| !result \|\| result\.error\) return;/);
 });
 
 test('poller is single-flight, catches network exceptions, and reports ended only once', () => {
@@ -37,7 +37,7 @@ test('poller is single-flight, catches network exceptions, and reports ended onl
   assert.match(watcher, /if \(result\.data\?\.status === 'ended'\) \{/);
   assert.match(watcher, /ended = true;\s*onEnded\(\)/);
   assert.match(watcher, /\.catch\(error => \{/);
-  assert.match(watcher, /if \(!disposed\) console\.warn\(/);
+  assert.match(watcher, /if \(!disposed && !controller\.signal\.aborted\) \{/);
   assert.match(watcher, /if \(inFlight === task\) inFlight = null/);
   assert.match(watcher, /MATCH_END_STATUS_TIMEOUT_MS = 12_000/);
   assert.match(watcher, /const controller = new AbortController\(\)/);
