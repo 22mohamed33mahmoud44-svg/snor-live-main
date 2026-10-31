@@ -45,6 +45,10 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
   const leavingRef = useRef(false);
+  // Ignore room callbacks from an old LiveKitRoom during retry teardown.
+  const roomAttemptId = `${matchId}-${retryKey}`;
+  const activeRoomAttemptRef = useRef(roomAttemptId);
+  activeRoomAttemptRef.current = roomAttemptId;
 
   // The Edge Function may never resolve. Bound token setup and ignore any
   // response from a previous attempt after retry, unmount or match change.
@@ -104,6 +108,7 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
     setToken(null);
     setRoomConnected(false);
     setTokenLoading(true);
+    activeRoomAttemptRef.current = `${matchId}-${retryKey + 1}`;
     setRetryKey(key => key + 1);
   };
 
@@ -122,19 +127,24 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
 
   return (
     <LiveKitRoom
-      key={`${matchId}-${retryKey}`}
+      key={roomAttemptId}
       token={token}
       serverUrl={import.meta.env.VITE_LIVEKIT_URL}
       connect={true}
       // These props configure initial publishing; live toggles use TrackToggle.
       video={callType === 'video'}
       audio={true}
-      onConnected={() => setRoomConnected(true)}
+      onConnected={() => {
+        if (activeRoomAttemptRef.current === roomAttemptId) setRoomConnected(true);
+      }}
       onDisconnected={() => {
+        if (activeRoomAttemptRef.current !== roomAttemptId) return;
         setRoomConnected(false);
         setError(previous => previous ?? 'connection_failed');
       }}
-      onError={(liveKitError) => setError(classifyLiveKitError(liveKitError))}
+      onError={(liveKitError) => {
+        if (activeRoomAttemptRef.current === roomAttemptId) setError(classifyLiveKitError(liveKitError));
+      }}
     >
       {/* Remote audio must be rendered for both video and audio-only calls.
           This must NOT be muted when the user mutes their own microphone. */}
