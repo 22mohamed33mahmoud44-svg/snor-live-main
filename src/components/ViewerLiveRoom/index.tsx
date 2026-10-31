@@ -130,9 +130,17 @@ export default function ViewerLiveRoom({
     // Notify other viewers only after the database confirmed the count.
     // Never post an old stream's likes into a newly mounted room channel.
     if (channelAtFlush && roomChannelRef.current === channelAtFlush) {
-      void channelAtFlush.send({
-        type: 'broadcast', event: 'like_batch', payload: { count },
-      });
+      try {
+        void channelAtFlush.send({
+          type: 'broadcast', event: 'like_batch', payload: { count },
+        }).catch(error => {
+          console.warn('Like broadcast notification failed after saving:', error);
+        });
+      } catch (error) {
+        // Broadcast is cosmetic: a notification failure must not retry a
+        // database write that already succeeded and double-count likes.
+        console.warn('Like broadcast unavailable after saving:', error);
+      }
     }
     return true;
   }), [streamId]);
