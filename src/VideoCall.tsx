@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 import { endMatchOnServer } from './utils/endMatchOnServer';
 import { createCallMessageSender } from './utils/callMessageSender';
 import { createMatchEndStatusPoller } from './utils/matchEndStatusPoller';
+import { createCallNavigationGuard } from './utils/callNavigationGuard';
 import { createIdempotentCallChatWriter } from './utils/idempotentCallChatWriter';
 import { createSessionCallChatAttemptStore } from './utils/sessionCallChatAttemptStore';
 import { mergeStreamChatHistory } from './utils/mergeStreamChatHistory';
@@ -52,6 +53,8 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
   const leavingRef = useRef(false);
+  const navigationGuard = useMemo(() => createCallNavigationGuard(), [matchId]);
+  useEffect(() => () => navigationGuard.dispose(), [navigationGuard]);
   // Ignore room callbacks from an old LiveKitRoom during retry teardown.
   const roomAttemptId = `${matchId}-${retryKey}`;
   const activeRoomAttemptRef = useRef(roomAttemptId);
@@ -95,16 +98,17 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
     setLeaveError(null);
     try {
       if (await endMatchOnServer(matchId)) {
-        onEnd();
-      } else {
+        // A stale hangup acknowledgement must never navigate a newer call.
+        if (navigationGuard.claim()) onEnd();
+      } else if (navigationGuard.isActive()) {
         setLeaveError('تعذر تأكيد إنهاء المكالمة على الخادم. تحقق من الإنترنت وحاول مجدداً.');
       }
     } catch (error) {
       console.error('Failed to leave disconnected call:', error);
-      setLeaveError('تعذر إنهاء المكالمة بسبب مشكلة اتصال. حاول مرة أخرى.');
+      if (navigationGuard.isActive()) setLeaveError('تعذر إنهاء المكالمة بسبب مشكلة اتصال. حاول مرة أخرى.');
     } finally {
       leavingRef.current = false;
-      setLeaving(false);
+      if (navigationGuard.isActive()) setLeaving(false);
     }
   };
 
@@ -188,6 +192,10 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
 }
 
 function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
+  // Every mounted call UI owns an independent navigation guard. Delayed
+  // server responses from a disposed room are ignored.
+  const navigationGuard = useMemo(() => createCallNavigationGuard(), [matchId]);
+  useEffect(() => () => navigationGuard.dispose(), [navigationGuard]);
   const [mirrored, setMirrored] = useState(true);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [endError, setEndError] = useState<string | null>(null);
@@ -264,7 +272,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   useEffect(() => {
     let disposed = false;
     const handleEnded = () => {
-      if (disposed || endingRef.current) return;
+      if (disposed || endingRef.current || !navigationGuard.claim()) return;
       endingRef.current = true;
       playSFX(SFX_END);
       onEndRef.current();
@@ -341,7 +349,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
       clearInterval(poll);
       void supabase.removeChannel(channel);
     };
-  }, [matchId, userId, playSFX]);
+  }, [matchId, userId, playSFX, navigationGuard]);
 
   const triggerEndMatch = async (action: 'next' | 'end') => {
     if (endingRef.current) return;
@@ -352,18 +360,20 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
       // Do not write to signals after ending: RLS rejects that insert.
       confirmedEnded = await endMatchOnServer(matchId);
       if (!confirmedEnded) {
-        setEndError('تعذر تأكيد إنهاء المكالمة على الخادم. تحقق من الإنترنت وحاول مرة أخرى.');
+        if (navigationGuard.isActive()) setEndError('تعذر تأكيد إنهاء المكالمة على الخادم. تحقق من الإنترنت وحاول مرة أخرى.');
         return;
       }
+      // The caller may already have moved to another match during the RPC.
+      if (!navigationGuard.claim()) return;
       playSFX(SFX_END);
       if (action === 'next') onNext();
       else onEnd();
     } catch (error) {
       console.error('Call hangup failed:', error);
-      setEndError('تعذر إنهاء المكالمة. حاول مرة أخرى.');
+      if (navigationGuard.isActive()) setEndError('تعذر إنهاء المكالمة. حاول مرة أخرى.');
     } finally {
       // A confirmed end must not allow a second tap before navigation.
-      if (!confirmedEnded) endingRef.current = false;
+      if (!confirmedEnded && navigationGuard.isActive()) endingRef.current = false;
     }
   };
   const sendMessage = async () => {
