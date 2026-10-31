@@ -66,6 +66,27 @@ export default function BuyCoins({ onClose }: { onClose?: () => void }) {
 
   const pkg = PACKAGES.find((item) => item.id === selectedPkg);
 
+  // No payment provider has been approved for launch. Keep checkout
+  // inaccessible until a separately reviewed payment release.
+  const paymentsApprovedForLaunch = false;
+  if (!paymentsApprovedForLaunch) {
+    return (
+      <div dir="rtl" role="status" style={{
+        minHeight: "100dvh", background: "#05050c", color: "#fff",
+        padding: "40px 20px", textAlign: "center", fontFamily: "'Cairo', sans-serif",
+      }}>
+        {onClose && <button type="button" onClick={onClose} style={{
+          background: "#28283a", color: "#fff", border: "none",
+          borderRadius: 10, padding: "12px 20px", cursor: "pointer",
+        }}>رجوع</button>}
+        <h1 style={{ fontSize: 24, marginTop: 36 }}>شحن الكوينز غير متاح حاليًا</h1>
+        <p style={{ color: "#c7c7d6", maxWidth: 500, margin: "16px auto" }}>
+          بوابة الدفع قيد التجهيز والمراجعة. لن يتم تحويلك إلى أي صفحة دفع في الوقت الحالي.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
