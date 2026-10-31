@@ -559,6 +559,16 @@ export default function ActiveLiveRoom({
     setLiveKitError('تعذر توصيل الصوت أو الصورة للمشاهدين. أعد الاتصال أو أنهِ البث.');
   }, []);
 
+  // Publisher effects depend on callback identity. Stable callbacks prevent
+  // a one-second uptime/chat/like re-render from unpublishing and republishing
+  // camera/mic tracks over and over during a healthy connection.
+  const onPublishedForAttempt = useCallback(() => {
+    handleMediaPublished(roomAttemptId);
+  }, [handleMediaPublished, roomAttemptId]);
+  const onPublishErrorForAttempt = useCallback((error: Error) => {
+    handleMediaFailure(roomAttemptId, error);
+  }, [handleMediaFailure, roomAttemptId]);
+
   // Waiting for a token, a WebSocket, or a track publish must be bounded.
   useEffect(() => {
     if (!liveKitToken || mediaPublished || liveKitError) return;
@@ -966,8 +976,8 @@ export default function ActiveLiveRoom({
       >
         <StreamPublisher
           stream={streamRef.current}
-          onPublished={() => handleMediaPublished(roomAttemptId)}
-          onPublishError={(error) => handleMediaFailure(roomAttemptId, error)}
+          onPublished={onPublishedForAttempt}
+          onPublishError={onPublishErrorForAttempt}
         />
         {roomContent}
       </LiveKitRoom>
