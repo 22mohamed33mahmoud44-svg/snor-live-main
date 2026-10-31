@@ -314,8 +314,6 @@ export default function ViewerLiveRoom({
       }
     };
 
-    fetchOldMessages();
-
     const roomChannel = supabase.channel(`room-${streamId}`, {
       config: { presence: { key: currentMyUserId }, broadcast: { self: false } },
     });
@@ -361,9 +359,13 @@ export default function ViewerLiveRoom({
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED' && isMounted) {
-          roomChannel.track({ 
-            user_id: currentMyUserId, username: identityRef.current.myUsername, role: 'viewer', online_at: new Date().toISOString() 
+          // Subscribe BEFORE reading history. Otherwise a message committed
+          // between the initial SELECT and active Realtime subscription is
+          // invisible until another refresh. Backfill on reconnect as well.
+          void roomChannel.track({
+            user_id: currentMyUserId, username: identityRef.current.myUsername, role: 'viewer', online_at: new Date().toISOString()
           });
+          void fetchOldMessages();
         }
       });
 
