@@ -13,6 +13,8 @@ test('call UI shares one match-ended status query across initial and 3-second po
   assert.match(effect, /\.from\('matches'\)/);
   assert.match(effect, /\.select\('status'\)/);
   assert.match(effect, /\.eq\('id', matchId\)/);
+  assert.match(effect, /\.abortSignal\(signal\)/,
+    'timeout controller must abort the actual PostgREST request');
   assert.match(effect, /const checkEnded = \(\) => endStatusPoller\.check\(\)/);
   assert.match(effect, /void checkEnded\(\)/);
   assert.match(effect, /setInterval\(\(\) => \{ void checkEnded\(\); \}, 3000\)/);
@@ -26,7 +28,7 @@ test('unmount invalidates status callbacks before stopping timer and removing th
   assert.match(dispose, /disposed = true;\s*endStatusPoller\.dispose\(\);\s*clearInterval\(poll\);/);
   assert.match(dispose, /void supabase\.removeChannel\(channel\)/);
   assert.match(watcher, /if \(disposed \|\| ended\) return Promise\.resolve\(\)/);
-  assert.match(watcher, /\.then\(\(\) => disposed \? null : readStatus\(\)\)/);
+  assert.match(watcher, /\.then\(\(\) => disposed \|\| controller\.signal\.aborted \? null : readStatus\(controller\.signal\)\)/);
   assert.match(watcher, /if \(disposed \|\| ended \|\| !result \|\| result\.error\) return;/);
 });
 
@@ -37,4 +39,11 @@ test('poller is single-flight, catches network exceptions, and reports ended onl
   assert.match(watcher, /\.catch\(error => \{/);
   assert.match(watcher, /if \(!disposed\) console\.warn\(/);
   assert.match(watcher, /if \(inFlight === task\) inFlight = null/);
+  assert.match(watcher, /MATCH_END_STATUS_TIMEOUT_MS = 12_000/);
+  assert.match(watcher, /const controller = new AbortController\(\)/);
+  assert.match(watcher, /const deadline = setTimeout\(\(\) => controller\.abort\(\), timeoutMs\)/);
+  assert.match(watcher, /Promise\.race\(\[request, aborted\]\)/);
+  assert.match(watcher, /controller\.signal\.aborted/);
+  assert.match(watcher, /clearTimeout\(deadline\)/);
+  assert.match(watcher, /activeController\?\.abort\(\)/);
 });
