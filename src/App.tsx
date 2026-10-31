@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useAuth, OnboardingData } from './hooks/useAuth';
 import { shouldShowProfileError } from './utils/profileGate';
 import { translations } from './translations';
@@ -46,6 +46,10 @@ function App() {
   const [showProfile, setShowProfile] = useState(false);
   const [showRandomMatch, setShowRandomMatch] = useState(false);
   const [currentMatch, setCurrentMatch] = useState<Match | null>(null);
+  // Prevent a previous call's late onNext from starting matchmaking after
+  // a more recent match already became active.
+  const currentMatchRef = useRef(currentMatch);
+  currentMatchRef.current = currentMatch;
 
   const { user, profileChecked, profileError, showOnboarding, handleOnboardingComplete, logout } = useAuth();
   const t = translations[lang];
@@ -75,7 +79,19 @@ function App() {
   if (user && profileChecked && !showOnboarding) {
     if (currentMatch) return (
       <Suspense fallback={<Loading />}>
-        <VideoCall userId={user.id} matchId={currentMatch.id} onEnd={() => setCurrentMatch(null)} onNext={() => { setCurrentMatch(null); setShowRandomMatch(true); }} />
+        <VideoCall
+          key={currentMatch.id}
+          userId={user.id}
+          matchId={currentMatch.id}
+          onEnd={() => {
+            setCurrentMatch(previous => previous?.id === currentMatch.id ? null : previous);
+          }}
+          onNext={() => {
+            if (currentMatchRef.current?.id !== currentMatch.id) return;
+            setCurrentMatch(previous => previous?.id === currentMatch.id ? null : previous);
+            setShowRandomMatch(true);
+          }}
+        />
       </Suspense>
     );
 
