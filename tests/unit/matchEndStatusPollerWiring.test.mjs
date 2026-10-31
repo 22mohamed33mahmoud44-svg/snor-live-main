@@ -24,7 +24,7 @@ test('call UI shares one match-ended status query across initial and 3-second po
 
 test('unmount invalidates status callbacks before stopping timer and removing the Realtime channel', () => {
   const dispose = call.slice(call.indexOf('    return () => {\n      disposed = true;', call.indexOf('const endStatusPoller')),
-    call.indexOf('  }, [matchId, userId, playSFX]);', call.indexOf('const endStatusPoller')));
+    call.indexOf('  }, [matchId, userId, playSFX, navigationGuard]);', call.indexOf('const endStatusPoller')));
   assert.match(dispose, /disposed = true;\s*endStatusPoller\.dispose\(\);\s*clearInterval\(poll\);/);
   assert.match(dispose, /void supabase\.removeChannel\(channel\)/);
   assert.match(watcher, /if \(disposed \|\| ended\) return Promise\.resolve\(\)/);
