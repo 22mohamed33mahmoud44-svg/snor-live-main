@@ -1,0 +1,1 @@
+DROP POLICY IF EXISTS "chat_no_update" ON public.stream_chat;

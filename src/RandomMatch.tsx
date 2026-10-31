@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from './supabase';
-import { startMatching, cancelMatching, type Match } from './match';
+import { startMatching, cancelMatching, type Match, type MatchResult } from './match';
+import { endMatchOnServer } from './utils/endMatchOnServer';
+import { cancelRandomSearchAfterPending } from './utils/cancelRandomMatch';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type Props = {
@@ -9,7 +11,7 @@ type Props = {
   onMatch: (match: Match) => void;
 };
 
-type Phase = 'idle' | 'waiting' | 'matched' | 'error';
+type Phase = 'idle' | 'waiting' | 'matched' | 'error' | 'cancelling';
 
 // نطاق البحث عن مباراة حديثة (للفحص الاحتياطي) — دقيقتان
 const RECENT_MATCH_WINDOW_MS = 2 * 60 * 1000;
@@ -26,6 +28,10 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
   const matchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const matchedRef = useRef(false);
   const startingRef = useRef(false);
+  const cancellingRef = useRef(false);
+  const pendingStartRef = useRef<Promise<MatchResult> | null>(null);
+  const cancelTaskRef = useRef<Promise<boolean> | null>(null);
+  const cancelFailedRef = useRef(false);
   const phaseRef = useRef<Phase>('idle');
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
@@ -81,7 +87,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
   }, []);
 
   const handleMatchFound = useCallback((match: Match) => {
-    if (matchedRef.current) return;
+    if (matchedRef.current || phaseRef.current !== 'waiting') return;
     matchedRef.current = true;
 
     stopSearchResources();
@@ -100,20 +106,21 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       .from('matches')
       .select('id, user1, user2, status, created_at')
       .eq('status', 'active')
+      .eq('kind', 'random')
       .or(`user1.eq.${userId},user2.eq.${userId}`)
       .gte('created_at', cutoff)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    if (data && !matchedRef.current) {
+    if (data && !matchedRef.current && phaseRef.current === 'waiting') {
       handleMatchFound(data as Match);
     }
   }, [userId, handleMatchFound]);
 
   // ── Start matching ───────────────────────────────────────────
   const handleStart = async () => {
-    if (startingRef.current || phaseRef.current === 'waiting') return;
+    if (startingRef.current || cancellingRef.current || phaseRef.current === 'waiting') return;
     startingRef.current = true;
 
     matchedRef.current = false;
@@ -126,7 +133,9 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
 
       // الاشتراك اختياري للسرعة فقط. لو فشل أو تأخر، الـRPC + polling يكملان.
       const onInsert = (payload: { new: Record<string, unknown> }) => {
-        handleMatchFound(payload.new as unknown as Match);
+        if (payload.new.kind === 'random' && payload.new.status === 'active') {
+          handleMatchFound(payload.new as unknown as Match);
+        }
       };
 
       const channel = supabase
@@ -147,9 +156,11 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       channelRef.current = channel;
 
       // الـRPC هي المصدر الأساسي للحقيقة.
-      const result = await startMatching(userId);
+      pendingStartRef.current = startMatching(userId);
+      const result = await pendingStartRef.current;
 
-          if ((phaseRef.current as string) !== 'waiting') return;
+      // Ref state may change across awaited calls, despite TS control-flow narrowing.
+      if ((phaseRef.current as string) !== 'waiting') return;
       if (result.status === 'matched' && result.match) {
         handleMatchFound(result.match);
         return;
@@ -157,52 +168,93 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
 
       // فحص فوري بعد إضافة المستخدم لقائمة الانتظار.
       await checkExistingMatch();
-    } catch {
-      stopSearchResources();
-      cancelMatching(userId).catch(() => {});
-      setPhaseSafe('error');
+    } catch (error) {
+      if ((phaseRef.current as string) === 'waiting') {
+        console.error('Random matching failed:', error);
+        stopSearchResources();
+        void cancelMatching(userId).catch(() => {});
+        setPhaseSafe('error');
+      }
     } finally {
+      pendingStartRef.current = null;
       startingRef.current = false;
     }
   };
 
+  // Reuse the same cancellation procedure for the Cancel button and
+  // unmount cleanup. A shared task also prevents two overlapping RPCs.
+  const finishRandomSearch = useCallback((): Promise<boolean> => {
+    if (cancelTaskRef.current) return cancelTaskRef.current;
+    const account = userIdRef.current;
+    const task = cancelRandomSearchAfterPending(
+      pendingStartRef.current,
+      () => cancelMatching(account),
+      async () => {
+        const cutoff = new Date(Date.now() - RECENT_MATCH_WINDOW_MS).toISOString();
+        const { data, error } = await supabase
+          .from('matches')
+          .select('id, kind, status')
+          .eq('status', 'active')
+          .eq('kind', 'random')
+          .or(`user1.eq.${account},user2.eq.${account}`)
+          .gte('created_at', cutoff)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+      endMatchOnServer,
+    );
+    cancelTaskRef.current = task;
+    void task.finally(() => {
+      if (cancelTaskRef.current === task) cancelTaskRef.current = null;
+    }).catch(() => {});
+    return task;
+  }, []);
+
   // ── Cancel while waiting ─────────────────────────────────────
   const handleCancel = async () => {
-    if (matchedRef.current) return;
+    if (matchedRef.current || cancellingRef.current ||
+      (phaseRef.current !== 'waiting' && !(phaseRef.current === 'error' && cancelFailedRef.current))) return;
 
+    // Set the phase synchronously so delayed Realtime and polling callbacks
+    // cannot navigate to a call while the cancellation RPC is in flight.
+    cancellingRef.current = true;
+    cancelFailedRef.current = false;
+    setPhaseSafe('cancelling');
     stopSearchResources();
-    await cancelMatching(userId);
 
-    const cutoff = new Date(Date.now() - RECENT_MATCH_WINDOW_MS).toISOString();
-    const { data: strayMatch } = await supabase
-      .from('matches')
-      .select('id')
-      .eq('status', 'active')
-      .or(`user1.eq.${userId},user2.eq.${userId}`)
-      .gte('created_at', cutoff)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (strayMatch && !matchedRef.current) {
-      await supabase.from('matches').update({ status: 'ended' }).eq('id', strayMatch.id);
-      await supabase.from('signals').insert({ match_id: strayMatch.id, type: 'end', data: {}, sender: userId });
+    try {
+      if (!(await finishRandomSearch())) {
+        throw new Error('Could not verify canceled random match ended on server');
+      }
+      setPhaseSafe('idle');
+    } catch (error) {
+      console.error('Random match cancellation failed:', error);
+      cancelFailedRef.current = true;
+      setPhaseSafe('error');
+    } finally {
+      cancellingRef.current = false;
     }
-
-    setPhaseSafe('idle');
   };
 
-  // 🧹 تنظيف عند إغلاق الشاشة فقط
+  // An unmounted component must never let a late startMatching response
+  // enqueue the user again. Reconcile the same queue and random match state
+  // as the visible Cancel button, even if cancellation was already in flight.
   useEffect(() => {
     return () => {
       if (matchTimer.current) clearTimeout(matchTimer.current);
-      if (pollTimer.current) clearInterval(pollTimer.current);
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      if (phaseRef.current === 'waiting') {
-        cancelMatching(userIdRef.current).catch(() => {});
+      stopSearchResources();
+      if (phaseRef.current === 'waiting' || phaseRef.current === 'cancelling' ||
+        (phaseRef.current === 'error' && cancelFailedRef.current)) {
+        phaseRef.current = 'cancelling';
+        void finishRandomSearch().catch(error => {
+          console.error('Random matchmaking unmount cleanup failed:', error);
+        });
       }
     };
-  }, []);
+  }, [stopSearchResources, finishRandomSearch]);
 
   // ── Render ───────────────────────────────────────────────────
   return (
@@ -242,6 +294,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
         >
           {phase === 'idle'    && '🎲'}
           {phase === 'waiting' && '🔍'}
+          {phase === 'cancelling' && '⏳'}
           {phase === 'matched' && '🎉'}
           {phase === 'error'   && '⚠️'}
         </motion.div>
@@ -250,6 +303,7 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       <h2 style={s.title}>
         {phase === 'idle'    && 'مطابقة عشوائية'}
         {phase === 'waiting' && `جاري البحث${dots}`}
+        {phase === 'cancelling' && 'جاري إلغاء البحث...'}
         {phase === 'matched' && 'تم العثور على شريك!'}
         {phase === 'error'   && 'حدث خطأ في الاتصال'}
       </h2>
@@ -257,16 +311,17 @@ export default function RandomMatch({ userId, onClose, onMatch }: Props) {
       <p style={s.sub}>
         {phase === 'idle'    && 'اضغط ابدأ وهنوصّلك بشخص عشوائي على فيديو كول فوراً'}
         {phase === 'waiting' && 'بندور على شخص ليك… استنى لحظة'}
+        {phase === 'cancelling' && 'بننهي البحث بأمان قبل الرجوع.'}
         {phase === 'matched' && 'بيتم الاتصال الآن… استعد!'}
-        {phase === 'error'   && 'تعذر بدء البحث. تأكد من اتصالك بالإنترنت وحاول مرة أخرى'}
+        {phase === 'error'   && (cancelFailedRef.current ? 'تعذر تأكيد إلغاء البحث. حاول إلغاءه مرة أخرى.' : 'تعذر بدء البحث. تأكد من اتصالك بالإنترنت وحاول مرة أخرى')}
       </p>
 
       {(phase === 'idle' || phase === 'error') && (
         <motion.button
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-          style={s.btnPrimary} onClick={handleStart}
+          style={s.btnPrimary} onClick={phase === 'error' && cancelFailedRef.current ? handleCancel : handleStart}
         >
-          {phase === 'error' ? 'إعادة المحاولة' : 'ابدأ المطابقة الآن'}
+          {phase === 'error' && cancelFailedRef.current ? 'إعادة محاولة الإلغاء' : phase === 'error' ? 'إعادة المحاولة' : 'ابدأ المطابقة الآن'}
         </motion.button>
       )}
 

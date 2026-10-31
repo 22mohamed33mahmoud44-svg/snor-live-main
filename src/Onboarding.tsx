@@ -1,4 +1,5 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { isAdultBirthdate, latestEligibleBirthdate } from './utils/ageEligibility';
 
 interface OnboardingData {
   birthdate: string;
@@ -8,10 +9,12 @@ interface OnboardingData {
 }
 
 interface OnboardingProps {
-  onComplete: (data: OnboardingData) => void;
+  onComplete: (data: OnboardingData) => Promise<void>;
+  error?: string | null;
 }
 
-export default function Onboarding({ onComplete }: OnboardingProps) {
+export default function Onboarding({ onComplete, error }: OnboardingProps) {
+  const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState(1); // 1=birthdate, 2=gender, 3=lookingFor, 4=photo
   const [data, setData] = useState<OnboardingData>({
     birthdate:    '',
@@ -22,15 +25,16 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!imagePreview) return;
+    return () => URL.revokeObjectURL(imagePreview);
+  }, [imagePreview]);
+
   const totalSteps = 4;
   const progress   = (step / totalSteps) * 100;
 
   /* ── Age validation ── */
-  const isAgeValid = () => {
-    if (!data.birthdate) return false;
-    const diff = Date.now() - new Date(data.birthdate).getTime();
-    return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)) >= 18;
-  };
+  const isAgeValid = () => isAdultBirthdate(data.birthdate);
 
   const canProceed = () => {
     if (step === 1) return isAgeValid();
@@ -39,11 +43,29 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     return true; // photo is optional
   };
 
-  const next = () => {
-    if (step < totalSteps) setStep(s => s + 1);
-    else onComplete(data);
+  const next = async (skipPhoto = false) => {
+    if (submitting || !canProceed()) return;
+    if (step < totalSteps) {
+      setStep(s => s + 1);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await onComplete(skipPhoto ? { ...data, profileImage: null } : data);
+    } finally {
+      // On failure the parent keeps onboarding visible and displays error.
+      setSubmitting(false);
+    }
   };
   const back = () => setStep(s => s - 1);
+
+  const skipPhoto = () => {
+    if (submitting) return;
+    setData(current => ({ ...current, profileImage: null }));
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    void next(true);
+  };
 
   /* ── Image handling ── */
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -101,7 +123,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               type="date"
               value={data.birthdate}
               onChange={e => setData(d => ({ ...d, birthdate: e.target.value }))}
-              max={new Date(Date.now() - 18 * 365.25 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+              max={latestEligibleBirthdate()}
               style={styles.dateInput}
             />
             {data.birthdate && !isAgeValid() && (
@@ -179,7 +201,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp,image/gif"
               style={{ display: 'none' }}
               onChange={handleImageChange}
             />
@@ -216,19 +238,21 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           {renderStep()}
         </div>
 
+        {error && <p role="alert" aria-live="polite" style={{ color: '#f87171', textAlign: 'center' }}>{error}</p>}
+
         {/* Navigation */}
         <div style={styles.navRow}>
           {step > 1 && (
-            <button onClick={back} style={styles.backBtn}>← رجوع</button>
+            <button onClick={back} disabled={submitting} style={styles.backBtn}>← رجوع</button>
           )}
 
           {step === 4 && (
-            <button onClick={next} style={styles.skipBtn}>تخطي</button>
+            <button onClick={skipPhoto} disabled={submitting} style={styles.skipBtn}>تخطي الصورة</button>
           )}
 
           <button
-            onClick={next}
-            disabled={!canProceed()}
+            onClick={() => { void next(); }}
+            disabled={!canProceed() || submitting}
             style={{
               ...styles.nextBtn,
               opacity:       canProceed() ? 1 : 0.35,
@@ -237,7 +261,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               marginLeft:    step > 1 ? 0 : 'auto',
             }}
           >
-            {step === totalSteps ? '🚀 ابدأ' : 'التالي →'}
+            {submitting ? 'جاري حفظ الملف...' : step === totalSteps ? '🚀 ابدأ' : 'التالي →'}
           </button>
         </div>
       </div>

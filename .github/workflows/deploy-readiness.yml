@@ -29,6 +29,96 @@ jobs:
       - name: Install app dependencies
         run: npm ci
 
+      - name: Test LiveKit authorization rules
+        run: node --test supabase/functions/livekit-token/authorization.test.mjs
+
+      - name: Ensure LiveKit remote audio rendering and playback recovery are wired
+        run: node --test tests/unit/livekitAudioRendering.test.mjs
+
+      - name: Ensure call mute and camera controls update LiveKit tracks
+        run: node --test tests/unit/livekitMediaControls.test.mjs
+
+      - name: Check safe retry for failed-call exit and active-call hangup
+        run: node --test tests/unit/callExitFailureWiring.test.mjs
+
+      - name: Reject stale call exit and next navigation after match switch
+        run: node --test tests/unit/staleCallNavigationWiring.test.mjs
+
+      - name: Keep match status polls single-flight with cleanup on call exit
+        run: node --test tests/unit/matchEndStatusPollerWiring.test.mjs
+
+      - name: Restore call chat history after reconnect without losing live messages
+        run: node --test tests/unit/callChatHistoryWiring.test.mjs
+
+      - name: Confirm outgoing call chat messages appear without a Realtime echo
+        run: node --test tests/unit/callChatSavedAckWiring.test.mjs
+
+      - name: Timeout hung call chat sends while preserving retry IDs
+        run: node --test tests/unit/hungCallChatSendWiring.test.mjs
+
+      - name: Keep uncertain call chat IDs across same-tab refresh without storing message text
+        run: node --test tests/unit/sessionCallChatAttemptWiring.test.mjs
+
+      - name: Verify timed call setup and fresh LiveKit retry wiring
+        run: node --test tests/unit/videoCallConnectionTimeout.test.mjs
+
+      - name: Check viewer-only subscription and broadcaster media publishing
+        run: node --test tests/unit/liveStreamMediaWiring.test.mjs
+
+      - name: Ensure stream shutdown is confirmed by the server before unmount
+        run: node --test tests/unit/liveStreamShutdownWiring.test.mjs
+
+      - name: Check broadcaster and viewer chat draft safety
+        run: node --test tests/unit/liveStreamChatWiring.test.mjs
+
+      - name: Preserve latest live stream chat during historical message fetches
+        run: node --test tests/unit/streamChatHistoryWiring.test.mjs
+
+      - name: Backfill stream chat only after Realtime subscribes or reconnects
+        run: node --test tests/unit/streamChatSubscribeBeforeHistory.test.mjs
+
+      - name: Verify viewer likes survive failed batch writes and exit
+        run: node --test tests/unit/viewerLikeBatchWiring.test.mjs
+
+      - name: Prevent invalid like broadcasts and stale counter snapshots
+        run: node --test tests/unit/liveLikeCounterWiring.test.mjs
+
+      - name: Prevent indefinite viewer stream connection loading
+        run: node --test tests/unit/viewerStreamConnectionWiring.test.mjs
+
+      - name: Ignore old viewer LiveKit room callbacks during retry
+        run: node --test tests/unit/viewerStaleRoomCallbacks.test.mjs
+
+      - name: Check broadcaster token and publishing recovery
+        run: node --test tests/unit/broadcasterConnectionRecovery.test.mjs
+
+      - name: Ignore stale broadcaster publishing and LiveKit callbacks on reconnect
+        run: node --test tests/unit/broadcasterStaleRoomCallbacks.test.mjs
+
+      - name: Ensure broadcaster media capture stops on unmount and handles permission failures
+        run: node --test tests/unit/broadcasterCameraLifecycleWiring.test.mjs
+
+      - name: Prevent duplicate livestream creation and camera leaks in studio
+        run: node --test tests/unit/liveStreamLaunchWiring.test.mjs
+
+      - name: Ensure closing matchmaking cancels pending start and any late random match
+        run: node --test tests/unit/randomMatchUnmountWiring.test.mjs
+
+      - name: Test Stripe checkout input rules
+        run: node --test supabase/functions/create-checkout/checkout-validation.test.mjs
+
+      - name: Test Stripe webhook paid-price and buyer verification
+        run: node --test supabase/functions/stripe-webhook/checkout-credit-validation.test.mjs
+
+      - name: Verify recovered production migration archive integrity
+        run: node scripts/check-production-history.mjs
+
+      - name: Verify security patches are in executable migration chain
+        run: node scripts/check-security-migration-parity.mjs
+
+      - name: Guard against unexpected migration history drift
+        run: node scripts/report-migration-drift.mjs --report
+
       - name: Verify deploy/database readiness
         run: node scripts/verify-deploy-readiness.mjs
 
@@ -37,3 +127,566 @@ jobs:
 
       - name: Build app
         run: npm run build
+  single-active-stream-database-tests:
+    name: Prevent simultaneous streams on disposable PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Test active-stream uniqueness, history and duplicate preflight
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/single_live_stream_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_one_active_stream_per_owner.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/single_live_stream_assertions.sql
+
+          # The same patch must fail cleanly rather than silently ending
+          # already-active streams if pre-existing duplicates are present.
+          createdb snor_preflight
+          PGDATABASE=snor_preflight psql -X -v ON_ERROR_STOP=1 -f tests/sql/single_live_stream_duplicates_setup.sql
+          if PGDATABASE=snor_preflight psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_one_active_stream_per_owner.sql > /tmp/single-live-preflight.log 2>&1; then
+            echo 'ERROR: duplicate-active preflight unexpectedly succeeded'
+            exit 1
+          fi
+          if ! grep -q 'Existing duplicate active streams' /tmp/single-live-preflight.log; then
+            cat /tmp/single-live-preflight.log
+            echo 'ERROR: preflight failed for an unexpected reason'
+            exit 1
+          fi
+          PGDATABASE=snor_preflight psql -X -v ON_ERROR_STOP=1 -f tests/sql/single_live_stream_preflight_assertions.sql
+
+  direct-call-database-tests:
+    name: Test direct-call consent and RLS on disposable PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Test direct-call migration, RLS and consent
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/direct_calls_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030010000_021_secure_direct_calls.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/direct_calls_assertions.sql
+  stripe-database-tests:
+    name: Test Stripe checkout idempotency on disposable PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Test Stripe migration and replay-safe crediting
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/stripe_checkout_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030000000_020_atomic_stripe_checkout_credit.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/stripe_checkout_assertions.sql
+
+  gift-database-tests:
+    name: Test catalog gift pricing on disposable PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Test real SQL migration and atomic gift accounting
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/gift_prices_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/gift_prices_assertions.sql
+
+  profile-privacy-database-tests:
+    name: Test owner profiles and safe discovery on PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Test owner views, RLS and column privileges
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_privacy_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030030000_023_owner_profile_privacy.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_privacy_assertions.sql
+
+  profile-age-database-tests:
+    name: Enforce adult birthdate on writable profiles view with PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Check staged server-side age enforcement with real permissions
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_privacy_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030030000_023_owner_profile_privacy.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_age_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/security_patches/20261030_profile_adult_birthdate_guard.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/profile_age_assertions.sql
+
+  anon-rpc-security-tests:
+    name: Verify privileged RPCs reject anonymous calls
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Apply and verify least-privilege RPC grants
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/anon_rpc_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030040000_024_restrict_anonymous_rpc_execute.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/anon_rpc_assertions.sql
+
+  full-financial-chain-tests:
+    name: Test real _020 _022 _024 _026 financial chain on PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Run real ordered finance migration sequence and wallet assertions
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/gift_prices_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/combined_wallet_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/cross_migration_rpc_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/full_financial_chain_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030000000_020_atomic_stripe_checkout_credit.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql
+          psql -X -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION app_private.send_gift_safe(uuid,uuid,text,integer) TO authenticated"
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030040000_024_restrict_anonymous_rpc_execute.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030060000_026_lock_financial_table_writes.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/combined_wallet_assertions.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/full_financial_chain_assertions.sql
+
+  migration-chain-rpc-tests:
+    name: Test real _022 then _024 migration order on one PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Apply real gift migration before RPC security migration
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/gift_prices_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/cross_migration_rpc_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030040000_024_restrict_anonymous_rpc_execute.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/cross_migration_rpc_assertions.sql
+
+  leaderboard-database-tests:
+    name: Test materialized view grants on disposable PostgreSQL 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Verify materialized leaderboard API role privileges
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/leaderboard_mviews_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030050000_025_protect_leaderboard_materialized_views.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/leaderboard_mviews_assertions.sql
+  financial-writes-database-tests:
+    name: Prevent forged gifts and browser financial table writes
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Prove RLS forbids forged gift logs and trusted gifts still work
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/gift_prices_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/financial_writes_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030060000_026_lock_financial_table_writes.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/financial_writes_assertions.sql
+
+  edge-functions-typecheck:
+    name: Typecheck Supabase Edge Functions with Deno 2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Typecheck LiveKit token and Stripe functions
+        run: |
+          deno check --no-lock --node-modules-dir=auto supabase/functions/livekit-token/index.ts
+          deno check --no-lock --node-modules-dir=auto supabase/functions/stripe-webhook/index.ts
+          deno check --no-lock --node-modules-dir=auto supabase/functions/create-checkout/index.ts
+
+      - name: Test signup confirmation and authenticated session routing
+        run: deno test tests/unit/emailAuthOutcome.test.ts
+
+      - name: Ensure unsafe Vercel previews cannot initialize the application
+        run: deno test tests/unit/previewSafety.test.ts
+
+      - name: Test new-account profile field requirements
+        run: deno test tests/unit/profileDefaults.test.ts
+
+      - name: Prevent incomplete profiles and failed profile lookups from reaching dashboard
+        run: deno test tests/unit/profileGate.test.ts
+
+      - name: Validate age at exact birthday boundaries
+        run: deno test tests/unit/ageEligibility.test.ts
+
+      - name: Test cancellation never terminates a direct call
+        run: deno test tests/unit/cancelRandomMatch.test.ts
+
+      - name: Prevent phantom live streams when end calls fail
+        run: deno test tests/unit/endLiveStreamOnServer.test.ts
+
+      - name: Verify ended matches despite network or database failures
+        run: deno test tests/unit/confirmMatchEnded.test.ts
+
+      - name: Claim call navigation once and ignore disposed match responses
+        run: deno test tests/unit/callNavigationGuard.test.ts
+
+      - name: Prevent overlapping match status reads and stale-ended callbacks
+        run: deno test tests/unit/matchEndStatusPoller.test.ts
+
+      - name: Bound LiveKit token wait and ignore stale requests
+        run: deno test tests/unit/timedCallTokenRequest.test.ts
+
+      - name: Serialize stream launch requests and retry after failed writes
+        run: deno test tests/unit/streamLaunchGate.test.ts
+
+      - name: Explain cross-device active stream conflicts accurately
+        run: deno test tests/unit/streamLaunchError.test.ts
+
+      - name: Keep call-chat drafts on failed message sends
+        run: deno test tests/unit/callMessageSender.test.ts
+
+      - name: Merge latest call chat messages with in-flight Realtime traffic
+        run: deno test tests/unit/callChatHistory.test.ts
+
+      - name: Deduplicate persisted outgoing call messages across Realtime and history
+        run: deno test tests/unit/callChatSavedAck.test.ts
+
+      - name: Prevent duplicate call chat when an insert commits but its response is lost
+        run: deno test tests/unit/idempotentCallChatWriter.test.ts
+
+      - name: Abort stuck call chat writes and recover lost confirmations
+        run: deno test tests/unit/hungCallChatSend.test.ts
+
+      - name: Reuse pending chat UUID after refresh and expire stored retry metadata
+        run: deno test tests/unit/sessionCallChatAttemptStore.test.ts
+
+      - name: Merge history with new and pending live stream chat safely
+        run: deno test tests/unit/mergeStreamChatHistory.test.ts
+
+      - name: Acknowledge broadcaster chat without Realtime and preserve identical messages
+        run: deno test tests/unit/broadcasterChatAcknowledgement.test.ts
+
+      - name: Serialize viewer like RPCs and flush unsent likes on exit
+        run: deno test tests/unit/streamLikeBatcher.test.ts
+
+      - name: Sanitize like batches and preserve newest visible like counts
+        run: deno test tests/unit/streamLikeCounter.test.ts
+
+      - name: Stop camera and mic tracks from late browser permission grants
+        run: deno test tests/unit/cancelableMediaCapture.test.ts
+
+      - name: Check signed LiveKit token media permissions
+        run: deno test --allow-env --no-lock --node-modules-dir=auto supabase/functions/livekit-token/token-grants.test.mjs
+
+  combined-wallet-database-tests:
+    name: Test Stripe-funded gifts in one PostgreSQL database
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: snor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d snor_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Apply both real migrations to one wallet and reconcile ledgers
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGDATABASE: snor_test
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/gift_prices_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/combined_wallet_setup.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030000000_020_atomic_stripe_checkout_credit.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261030020000_022_validate_gift_catalog_prices.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/combined_wallet_assertions.sql

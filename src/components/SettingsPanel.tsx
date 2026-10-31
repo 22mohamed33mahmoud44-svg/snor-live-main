@@ -116,12 +116,12 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
       try {
         const { data, error } = await supabase
           .from('profiles')
-          .select('followers_count, profile_visits, stream_minutes')
+          .select('followers_count')
           .eq('id', myProfile.id)
           .maybeSingle();
 
         if (data && !error) {
-          setStats({ minutes: data.stream_minutes || 0, visits: data.profile_visits || 0, followers: data.followers_count || 0 });
+          setStats(prev => ({ ...prev, followers: data.followers_count || 0 }));
         }
       } catch (err) { console.warn("Stats fetch error:", err); }
     };
@@ -138,15 +138,8 @@ export default function SettingsPanel({ onClose, myProfile, onLogout, onOpenEdit
     // 2. حفظ في الـ LocalStorage لضمان بقائها حتى لو قفل التطبيق
     localStorage.setItem(`snor_setting_${key}`, JSON.stringify(newValue));
     
-    // 3. تحديث صامت في قاعدة البيانات دون ملامسة جلسة الـ Auth العنيفة
-    try {
-      await supabase
-        .from('profiles')
-        .update({ [key]: newValue })
-        .eq('id', myProfile?.id);
-    } catch (error) {
-      console.warn("حفظ السيرفر الاختياري");
-    }
+    // SettingsContext handles the real privacy DB columns. Other options stay local.
+    // Do not write UI keys such as "notif" or "hideOnline" to nonexistent columns.
   };
 
   const formatNumber = (num: number) => num >= 1000 ? (num / 1000).toFixed(1) + 'k' : num.toString();

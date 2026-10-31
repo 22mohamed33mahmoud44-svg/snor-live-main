@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from './supabase';
+import { emailAuthNextStep } from './utils/emailAuthOutcome';
 
 interface AuthProps {
   isOpen: boolean;
@@ -11,32 +12,77 @@ export default function Auth({ isOpen, onClose }: AuthProps) {
   const [password, setPassword] = useState('');
   const [loading, setLoading]   = useState(false);
   const [message, setMessage]   = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
 
   if (!isOpen) return null;
 
   const handleEmailAuth = async () => {
-    if (!email || !password) {
+    if (loading) return;
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
       setMessage('من فضلك ادخل الإيميل وكلمة المرور');
       return;
     }
+
     setLoading(true);
     setMessage('');
+    setSuccessMessage('');
 
-    const { error } = isSignUp
-      ? await supabase.auth.signUp({ email, password })
-      : await supabase.auth.signInWithPassword({ email, password });
+    try {
+      if (isSignUp) {
+        const { data, error } = await supabase.auth.signUp({
+          email: trimmedEmail,
+          password,
+        });
+        if (error) throw error;
 
-    if (error) setMessage(error.message);
-    else onClose();
-    setLoading(false);
+        const next = emailAuthNextStep(true, data);
+        if (next === 'signed-in') {
+          onClose();
+        } else if (next === 'check-email') {
+          // This may also be an obfuscated response for an existing email.
+          // Do not reveal whether an account already exists.
+          setSuccessMessage('لو البريد مؤهل للتسجيل، هتوصلك رسالة لتأكيد حسابك. افتح رابط التأكيد وبعدها سجّل دخولك هنا.');
+          setPassword('');
+        } else {
+          setMessage('تعذر إكمال إنشاء الحساب. حاول مرة أخرى.');
+        }
+      } else {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password,
+        });
+        if (error) throw error;
+        if (emailAuthNextStep(false, data) === 'signed-in') {
+          onClose();
+        } else {
+          setMessage('لم يتم إنشاء جلسة دخول. تأكد من البريد وحاول مجددًا.');
+        }
+      }
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? error.message : 'تعذر الاتصال بخدمة تسجيل الدخول.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleGoogleLogin = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: window.location.origin },
-    });
+    if (loading) return;
+    setLoading(true);
+    setMessage('');
+    setSuccessMessage('');
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) throw error;
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? error.message : 'تعذر بدء تسجيل الدخول بجوجل.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -62,14 +108,20 @@ export default function Auth({ isOpen, onClose }: AuthProps) {
 
         {/* Error */}
         {message && (
-          <p style={{ color: '#f87171', fontSize: 13, textAlign: 'center', marginBottom: 16, fontFamily: 'Cairo, sans-serif' }}>
+          <p role="alert" style={{ color: '#f87171', fontSize: 13, textAlign: 'center', marginBottom: 16, fontFamily: 'Cairo, sans-serif' }}>
             {message}
+          </p>
+        )}
+        {successMessage && (
+          <p role="status" aria-live="polite" style={{ color: '#86efac', fontSize: 14, textAlign: 'center', lineHeight: 1.8, marginBottom: 16, fontFamily: 'Cairo, sans-serif' }}>
+            {successMessage}
           </p>
         )}
 
         {/* Google Button */}
         <button
-          onClick={handleGoogleLogin}
+          onClick={() => { void handleGoogleLogin(); }}
+          disabled={loading}
           style={{ width: '100%', background: '#fff', color: '#111', padding: '13px', borderRadius: 12, border: 'none', fontWeight: 800, fontSize: 15, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 20, fontFamily: 'Cairo, sans-serif', boxShadow: '0 4px 15px rgba(0,0,0,0.2)' }}
         >
           <img src="https://www.google.com/favicon.ico" style={{ width: 20, height: 20 }} alt="Google" />
@@ -107,7 +159,7 @@ export default function Auth({ isOpen, onClose }: AuthProps) {
 
         {/* Submit */}
         <button
-          onClick={handleEmailAuth}
+          onClick={() => { void handleEmailAuth(); }}
           disabled={loading}
           style={{ width: '100%', background: 'linear-gradient(135deg, #7c6aff, #06b6d4)', color: '#fff', padding: '13px', borderRadius: 12, border: 'none', fontWeight: 800, fontSize: 16, cursor: 'pointer', fontFamily: 'Cairo, sans-serif', opacity: loading ? 0.7 : 1, marginBottom: 16 }}
         >
@@ -118,7 +170,7 @@ export default function Auth({ isOpen, onClose }: AuthProps) {
         <p style={{ textAlign: 'center', color: '#6b7280', fontSize: 13, fontFamily: 'Cairo, sans-serif', direction: 'rtl' }}>
           {isSignUp ? 'عندك حساب؟ ' : 'مش عندك حساب؟ '}
           <button
-            onClick={() => { setIsSignUp(!isSignUp); setMessage(''); }}
+            onClick={() => { setIsSignUp(!isSignUp); setMessage(''); setSuccessMessage(''); }}
             style={{ color: '#06b6d4', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, fontFamily: 'Cairo, sans-serif', fontSize: 13 }}
           >
             {isSignUp ? 'سجّل دخول' : 'إنشاء حساب'}

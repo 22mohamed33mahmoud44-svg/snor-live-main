@@ -1,0 +1,299 @@
+{
+  "description": "Read-only snapshot of production Supabase migration catalog, not an executable migration plan",
+  "project": "ogzrothtgxupawgjbioc",
+  "captured_date": "2026-10-30",
+  "source": "supabase_migrations.schema_migrations; statements joined with newline for md5 metadata",
+  "production_migrations": [
+    {
+      "version": "20260723064545",
+      "name": "001_coins_system",
+      "statement_count": 55,
+      "recorded_md5": "0819451665bb34bbbae3e183410ef740",
+      "recorded_chars": 12432
+    },
+    {
+      "version": "20260723075755",
+      "name": "005_fix_schema_alignment",
+      "statement_count": 16,
+      "recorded_md5": "0bad189341b85b9e1656dbb747b8c951",
+      "recorded_chars": 2420
+    },
+    {
+      "version": "20260819003311",
+      "name": "ensure_live_stream_cleanup",
+      "statement_count": 1,
+      "recorded_md5": "aa4808953dcb139f1f71e8fc8315bf42",
+      "recorded_chars": 1243
+    },
+    {
+      "version": "20260819003623",
+      "name": "restore_batched_stream_likes",
+      "statement_count": 1,
+      "recorded_md5": "b8ad4ad42a187d7e63caba86a89b98cb",
+      "recorded_chars": 959
+    },
+    {
+      "version": "20260822011814",
+      "name": "harden_security_and_fix_schema_20260822",
+      "statement_count": 1,
+      "recorded_md5": "473b2c0c29c78c45c87fa7f123969386",
+      "recorded_chars": 13987
+    },
+    {
+      "version": "20260822012000",
+      "name": "repair_paymob_payment_state_20260822",
+      "statement_count": 1,
+      "recorded_md5": "d35db639f50f73adf360ddcc314bc027",
+      "recorded_chars": 908
+    },
+    {
+      "version": "20260822012135",
+      "name": "repair_xsolla_payment_state_20260822",
+      "statement_count": 1,
+      "recorded_md5": "1c5fa2540d6801beda5b14c4bc6d1da8",
+      "recorded_chars": 517
+    },
+    {
+      "version": "20260822012327",
+      "name": "provider_transaction_idempotency_20260822",
+      "statement_count": 1,
+      "recorded_md5": "56564a91d1b202a38b356c9ae8af89d4",
+      "recorded_chars": 1874
+    },
+    {
+      "version": "20260822012342",
+      "name": "explicit_server_only_payment_event_policies_20260822",
+      "statement_count": 1,
+      "recorded_md5": "03f22ad468f034e81ca19816913d072b",
+      "recorded_chars": 302
+    },
+    {
+      "version": "20260822012809",
+      "name": "remove_all_payment_gateway_database_objects_20260822",
+      "statement_count": 1,
+      "recorded_md5": "74b0976e6a9777d22214f78f0118e0cb",
+      "recorded_chars": 1375
+    },
+    {
+      "version": "20260822013341",
+      "name": "normalize_identity_types_and_message_policies_v2_20260822",
+      "statement_count": 1,
+      "recorded_md5": "a808a28e9aa93dda9ff5a856a17eb610",
+      "recorded_chars": 11958
+    },
+    {
+      "version": "20260822013409",
+      "name": "tighten_profile_and_view_grants_20260822",
+      "statement_count": 1,
+      "recorded_md5": "fd5888306cada61c2e6f594f7e190c84",
+      "recorded_chars": 646
+    },
+    {
+      "version": "20260822013414",
+      "name": "harden_profile_public_read_surface_20260822",
+      "statement_count": 1,
+      "recorded_md5": "257f0fdd9f704ba78fbe7fc09723980f",
+      "recorded_chars": 359
+    },
+    {
+      "version": "20260822013441",
+      "name": "least_privilege_table_grants_and_policies_20260822",
+      "statement_count": 1,
+      "recorded_md5": "092dab926f339a723a8e57af6c18e90a",
+      "recorded_chars": 3773
+    },
+    {
+      "version": "20260822013515",
+      "name": "remove_obsolete_chat_no_update_policy_20260822",
+      "statement_count": 1,
+      "recorded_md5": "f400f15cf25aafcb9d69f774d31ecddb",
+      "recorded_chars": 61
+    },
+    {
+      "version": "20260822013541",
+      "name": "index_foreign_keys_and_reduce_security_definer_surface_20260822",
+      "statement_count": 1,
+      "recorded_md5": "d664830d848c02d2aee6c16c1c220502",
+      "recorded_chars": 863
+    },
+    {
+      "version": "20260822013823",
+      "name": "fix_stream_gift_accounting_batched_likes_and_matchmaking_20260822",
+      "statement_count": 1,
+      "recorded_md5": "50d1a024f64548b86c4e0d30b24cfc0b",
+      "recorded_chars": 6773
+    },
+    {
+      "version": "20260822013949",
+      "name": "move_privileged_rpc_logic_to_private_schema_20260822",
+      "statement_count": 1,
+      "recorded_md5": "a398cfbdf79f16e26d9fb5925bd39cba",
+      "recorded_chars": 14958
+    },
+    {
+      "version": "20260822014218",
+      "name": "harden_avatar_storage_bucket_v2_20260822",
+      "statement_count": 1,
+      "recorded_md5": "c60ef9e89ed8a55f8998163c6ddf46cb",
+      "recorded_chars": 1686
+    },
+    {
+      "version": "20260822014303",
+      "name": "normalize_profile_date_and_utc_timestamps_20260822",
+      "statement_count": 1,
+      "recorded_md5": "5d96e7f0f2dca2667ffe19944440968e",
+      "recorded_chars": 864
+    },
+    {
+      "version": "20260822014401",
+      "name": "complete_referential_integrity_and_delete_semantics_20260822",
+      "statement_count": 1,
+      "recorded_md5": "f902497f031c8dc7554dc76922ab4a00",
+      "recorded_chars": 3002
+    },
+    {
+      "version": "20260822014513",
+      "name": "repair_signup_coin_balances_and_ledger_20260822",
+      "statement_count": 1,
+      "recorded_md5": "f9b0dc8b493fa527ccbf7418680024fc",
+      "recorded_chars": 1230
+    },
+    {
+      "version": "20260822014539",
+      "name": "gracefully_end_matches_before_auth_user_delete_20260822",
+      "statement_count": 1,
+      "recorded_md5": "499244f8754f8c80d60f9283c902cda9",
+      "recorded_chars": 604
+    },
+    {
+      "version": "20260822014608",
+      "name": "cleanup_signals_when_match_ends_20260822",
+      "statement_count": 1,
+      "recorded_md5": "72d8cb10b6620c18586c81c9881e93bd",
+      "recorded_chars": 718
+    },
+    {
+      "version": "20260822014804",
+      "name": "mask_private_profile_fields_without_frontend_breakage_20260822",
+      "statement_count": 1,
+      "recorded_md5": "9c55c0b2a84842e4d5db8e78044807ad",
+      "recorded_chars": 4227
+    },
+    {
+      "version": "20260822015045",
+      "name": "close_direct_write_escalation_paths_20260822",
+      "statement_count": 1,
+      "recorded_md5": "0393c1a6ef12ed0adea5f43e766cbb23",
+      "recorded_chars": 2614
+    },
+    {
+      "version": "20260822015126",
+      "name": "make_profile_identity_authoritative_for_streams_and_chat_20260822",
+      "statement_count": 1,
+      "recorded_md5": "9bd64d4e0c2a46e6abb654bf4d6b4060",
+      "recorded_chars": 2906
+    },
+    {
+      "version": "20260822015207",
+      "name": "bound_user_generated_content_and_metadata_20260822",
+      "statement_count": 1,
+      "recorded_md5": "04158a62358ab68c60fa4d4951d91a28",
+      "recorded_chars": 2023
+    },
+    {
+      "version": "20260822015238",
+      "name": "restore_like_rpc_compatibility_and_rate_limit_20260822",
+      "statement_count": 1,
+      "recorded_md5": "16ea513c8c5832897b2d5f207846e175",
+      "recorded_chars": 3455
+    },
+    {
+      "version": "20260822015600",
+      "name": "index_private_like_rate_stream_fk_20260822",
+      "statement_count": 1,
+      "recorded_md5": "e8677204d0d1611718569bcac64a42f3",
+      "recorded_chars": 101
+    },
+    {
+      "version": "20260822015727",
+      "name": "harden_background_maintenance_functions_20260822",
+      "statement_count": 1,
+      "recorded_md5": "e23cd4f3171ed5fd4c016161c342647f",
+      "recorded_chars": 1615
+    },
+    {
+      "version": "20260822015929",
+      "name": "hide_internal_rpc_errors_20260822",
+      "statement_count": 1,
+      "recorded_md5": "a1b45c56e6eff8bde48512f23648b1e1",
+      "recorded_chars": 1406
+    },
+    {
+      "version": "20260822020056",
+      "name": "enforce_nonnull_relations_and_server_heartbeat_20260822",
+      "statement_count": 1,
+      "recorded_md5": "701e24a7bdff79de6fcabb4e5568bb4e",
+      "recorded_chars": 1443
+    },
+    {
+      "version": "20260822020209",
+      "name": "lock_private_schema_default_privileges_20260822",
+      "statement_count": 1,
+      "recorded_md5": "c5abd10a631317831b61567650942c03",
+      "recorded_chars": 547
+    },
+    {
+      "version": "20260822205256",
+      "name": "sync_storage_buckets_and_policies_20260822",
+      "statement_count": 1,
+      "recorded_md5": "a525e75a030aa2ccf8f79f315b5fbbd8",
+      "recorded_chars": 1884
+    },
+    {
+      "version": "20260908221940",
+      "name": "019_stripe_only_payments",
+      "statement_count": 1,
+      "recorded_md5": "246806d83f775de6513621577fd6abfa",
+      "recorded_chars": 886
+    }
+  ],
+  "known_historical_local_unapplied": [
+    "20260723064616",
+    "20260723064639",
+    "20260820000000",
+    "20260821000000",
+    "20260822000000",
+    "20260823000000",
+    "20260824000000",
+    "20260825000000",
+    "20260826000000",
+    "20260827000000",
+    "20260828000000",
+    "20260829000000",
+    "20260830000000",
+    "20260831000000",
+    "20260901000000"
+  ],
+  "known_shared_text_comparison": [
+    {
+      "version": "20260723064545",
+      "comparison": "nonidentical",
+      "note": "55 statement fragments versus one repository SQL file; not text-identical"
+    },
+    {
+      "version": "20260723075755",
+      "comparison": "nonidentical",
+      "note": "16 statement fragments versus one repository SQL file; not text-identical"
+    },
+    {
+      "version": "20260819003311",
+      "comparison": "whitespace-only",
+      "note": "Texts match after trimming surrounding whitespace"
+    },
+    {
+      "version": "20260819003623",
+      "comparison": "exact",
+      "note": "Texts match exactly"
+    }
+  ]
+}

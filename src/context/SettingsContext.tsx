@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../supabase';
 
-// ── Types ────────────────────────────────────────────────────────
 export interface UserSettings {
   notif: boolean;
   sound: boolean;
@@ -18,108 +17,85 @@ interface SettingsContextType {
   isLoading: boolean;
 }
 
-// ── Default Values ───────────────────────────────────────────────
 const defaultSettings: UserSettings = {
-  notif: true,
-  sound: true,
-  liveNotif: false,
-  discover: true,
-  hideOnline: false,
-  dark: true,
-  neon: true,
+  notif: true, sound: true, liveNotif: false, discover: true,
+  hideOnline: false, dark: true, neon: true,
 };
 
-// ── Context ──────────────────────────────────────────────────────
 const SettingsContext = createContext<SettingsContextType | null>(null);
+const settingsKey = (userId?: string) => `user_app_settings_${userId || 'guest'}`;
 
-export const SettingsProvider = ({ children, userId }: { children: React.ReactNode, userId?: string }) => {
+function readLocalSettings(userId?: string): UserSettings {
+  try {
+    const saved = localStorage.getItem(settingsKey(userId));
+    return saved ? { ...defaultSettings, ...JSON.parse(saved) } : { ...defaultSettings };
+  } catch {
+    return { ...defaultSettings };
+  }
+}
+
+export const SettingsProvider = ({ children, userId }: { children: React.ReactNode; userId?: string }) => {
   const [isLoading, setIsLoading] = useState(true);
+  const [settings, setSettings] = useState<UserSettings>(() => readLocalSettings(userId));
 
-  // 1. التهيئة المبدئية من LocalStorage لسرعة عرض الواجهة
-  const [settings, setSettings] = useState<UserSettings>(() => {
-    try {
-      const localSettings = localStorage.getItem('user_app_settings');
-      return localSettings ? JSON.parse(localSettings) : defaultSettings;
-    } catch {
-      return defaultSettings;
-    }
-  });
-
-  // 2. جلب الإعدادات من Supabase عند تسجيل الدخول أو تحميل التطبيق
+  // The production profiles view has no 'settings' JSON column. The actual
+  // privacy fields are show_in_radar and hide_online; other preferences are local.
   useEffect(() => {
-    const fetchSettings = async () => {
-      if (!userId) {
-        setIsLoading(false);
-        return;
+    let canceled = false;
+    const local = readLocalSettings(userId);
+    setSettings(local);
+    setIsLoading(!!userId);
+
+    if (!userId) return;
+
+    const fetchPrivacy = async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('show_in_radar, hide_online')
+        .eq('id', userId)
+        .maybeSingle();
+      if (canceled) return;
+
+      if (error) {
+        console.warn('Could not fetch profile privacy settings', error);
+      } else if (data) {
+        const merged: UserSettings = {
+          ...local,
+          discover: typeof data.show_in_radar === 'boolean' ? data.show_in_radar : local.discover,
+          hideOnline: typeof data.hide_online === 'boolean' ? data.hide_online : local.hideOnline,
+        };
+        setSettings(merged);
+        localStorage.setItem(settingsKey(userId), JSON.stringify(merged));
       }
-
-      try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('settings')
-          .eq('id', userId)
-          .single();
-
-        // تم استخدام المتغير error هنا لحل التحذير
-        if (error) {
-          console.error("حدث خطأ أثناء جلب الإعدادات:", error);
-        }
-
-        if (data?.settings) {
-          const mergedSettings = { ...defaultSettings, ...data.settings };
-          setSettings(mergedSettings);
-          localStorage.setItem('user_app_settings', JSON.stringify(mergedSettings));
-        }
-      } catch {
-        // تم إزالة متغير الخطأ من هنا لأنه لم يكن مستخدماً
-        console.error('فشل في عملية الاتصال لجلب الإعدادات');
-      } finally {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
     };
-
-    fetchSettings();
+    void fetchPrivacy();
+    return () => { canceled = true; };
   }, [userId]);
 
-  // 3. تطبيق التأثيرات المرئية (CSS) على مستوى التطبيق بالكامل
   useEffect(() => {
     const root = document.documentElement;
-    
-    if (settings.dark) {
-      root.classList.add('dark');
-      root.classList.remove('light');
-    } else {
-      root.classList.add('light');
-      root.classList.remove('dark');
-    }
-
-    if (settings.neon) {
-      root.classList.add('neon-active');
-    } else {
-      root.classList.remove('neon-active');
-    }
+    root.classList.toggle('dark', settings.dark);
+    root.classList.toggle('light', !settings.dark);
+    root.classList.toggle('neon-active', settings.neon);
   }, [settings.dark, settings.neon]);
 
-  // 4. دالة التحديث (استجابة فورية + حفظ محلي + مزامنة سحابية)
   const updateSetting = async <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => {
-    // التحديث الفوري للواجهة لضمان سرعة الاستجابة
-    const newSettings = { ...settings, [key]: value };
-    setSettings(newSettings);
-    
-    // الحفظ في LocalStorage
-    localStorage.setItem('user_app_settings', JSON.stringify(newSettings));
+    const updated = { ...settings, [key]: value };
+    setSettings(updated);
+    localStorage.setItem(settingsKey(userId), JSON.stringify(updated));
 
-    // المزامنة مع Supabase في الخلفية
-    if (userId) {
-      try {
-        await supabase
-          .from('profiles')
-          .update({ settings: newSettings })
-          .eq('id', userId);
-      } catch {
-        console.error('فشل مزامنة الإعداد مع الخادم');
-      }
-    }
+    if (!userId) return;
+    const dbField = key === 'discover'
+      ? 'show_in_radar'
+      : key === 'hideOnline' ? 'hide_online' : null;
+    if (!dbField) return; // The remaining preferences are device-local.
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ [dbField]: value })
+      .eq('id', userId);
+    if (error) console.warn('Could not synchronize privacy setting', error);
   };
 
   return (
@@ -129,11 +105,8 @@ export const SettingsProvider = ({ children, userId }: { children: React.ReactNo
   );
 };
 
-// Custom Hook لتسهيل الاستخدام
 export const useSettings = () => {
   const context = useContext(SettingsContext);
-  if (!context) {
-    throw new Error('useSettings must be used within a SettingsProvider');
-  }
+  if (!context) throw new Error('useSettings must be used within a SettingsProvider');
   return context;
 };

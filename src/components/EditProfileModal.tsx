@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../supabase';
+import { saveOwnProfile } from '../utils/saveOwnProfile';
 
 type ProfileData = {
   id: string;
@@ -7,7 +8,6 @@ type ProfileData = {
   username?: string;
   avatar_url?: string;
   gender?: string;
-  updated_at?: string;
 };
 
 interface EditProfileModalProps {
@@ -38,9 +38,17 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
       setUploading(true);
 
       const file = e.target.files[0];
-      const fileExt = file.name.split('.').pop();
-      // تثبيت اسم الملف لعدم تراكم الصور في السيرفر
-      const filePath = `avatars/${myProfile?.id}.${fileExt}`;
+      if (!myProfile?.id) throw new Error('تعذر تحديد الحساب');
+      const fileTypes: Record<string, string> = {
+        'image/jpeg': 'jpg', 'image/png': 'png',
+        'image/webp': 'webp', 'image/gif': 'gif',
+      };
+      const fileExt = fileTypes[file.type];
+      if (!fileExt || file.size > 5 * 1024 * 1024) {
+        throw new Error('يجب اختيار صورة مدعومة بحجم لا يتجاوز 5 ميجابايت');
+      }
+      // Supabase's avatars policy requires userId as the first folder.
+      const filePath = `${myProfile.id}/avatar-${Date.now()}.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
@@ -88,14 +96,14 @@ export default function EditProfileModal({ myProfile, onClose, onProfileUpdated 
         username: sanitizedUsername,
         gender,
         avatar_url: avatarUrl,
-        updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
-        .from('profiles')
-        .upsert(updatedData);
-
-      if (error) throw error;
+      await saveOwnProfile(myProfile.id, {
+        full_name: fullName,
+        username: sanitizedUsername,
+        gender,
+        avatar_url: avatarUrl,
+      });
 
       onProfileUpdated(updatedData);
       onClose();

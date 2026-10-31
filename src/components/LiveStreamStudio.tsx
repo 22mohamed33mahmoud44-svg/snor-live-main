@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { createStreamLaunchGate } from '../utils/streamLaunchGate';
 import {
   X, Mic, MicOff, Video, VideoOff, Wand2,
   Radio, Type, Sparkles, Activity, Monitor, AlertTriangle, RefreshCw
@@ -7,7 +8,8 @@ import {
 
 interface LiveStreamStudioProps {
   onClose: () => void;
-  onStart: (title: string, filterId: string, intensity: number, stream: MediaStream | null) => void;
+  onStart: (title: string, filterId: string, intensity: number, stream: MediaStream | null) => Promise<boolean>;
+  launchFailure?: string | null;
 }
 
 interface FilterType {
@@ -39,7 +41,7 @@ const filtersList: FilterType[] = [
   { id: 'mystic', name: 'سحر الغموض', icon: '🔮', getEffect: (v) => `hue-rotate(${v * 0.7}deg)`, unit: '%', defaultVal: 45, min: 0, max: 100 },
 ];
 
-export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioProps) {
+export default function LiveStreamStudio({ onClose, onStart, launchFailure }: LiveStreamStudioProps) {
   const [streamTitle, setStreamTitle] = useState('');
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
@@ -50,12 +52,24 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>('idle');
   const [cameraError, setCameraError] = useState<string>('');
+  const [launching, setLaunching] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const [videoInfo, setVideoInfo] = useState<{ width: number; height: number; frameRate: number } | null>(null);
 
   const intensityMapRef = useRef<Record<string, number>>({});
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const handedOffRef = useRef(false);
+  const launchingRef = useRef(false);
+  const unmountedRef = useRef(false);
+  const captureRequestRef = useRef(0);
+  const onStartRef = useRef(onStart);
+  onStartRef.current = onStart;
+  // Keep a single gate across rerenders, including during the async DB insert.
+  const launchGateRef = useRef(createStreamLaunchGate(
+    (title: string, filter: string, intensity: number, stream: MediaStream) =>
+      onStartRef.current(title, filter, intensity, stream),
+  ));
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
@@ -69,9 +83,11 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
     setCameraStatus('loading');
     setCameraError('');
 
-    // إيقاف أي Track قديم شغال قبل إعادة التهيئة لمنع قفل الهاردوير للعدسة
+    // Invalidate older getUserMedia promises, which may finish after Close.
+    const requestId = ++captureRequestRef.current;
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
 
     try {
@@ -86,6 +102,10 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
         audio: true,
       });
 
+      if (unmountedRef.current || requestId !== captureRequestRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
 
@@ -101,6 +121,7 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
 
       setCameraStatus('ready');
     } catch (err) {
+      if (unmountedRef.current || requestId !== captureRequestRef.current) return;
       console.error('🔮 Camera System Error:', err);
       setCameraStatus('error');
 
@@ -115,9 +136,12 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
   }, []);
 
   useEffect(() => {
-    initCamera();
+    unmountedRef.current = false;
+    void initCamera();
 
     return () => {
+      unmountedRef.current = true;
+      captureRequestRef.current++;
       if (!handedOffRef.current && streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
@@ -151,12 +175,35 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
     intensityMapRef.current[selectedFilter] = value;
   };
 
-  const handleStart = () => {
+  const handleStart = async () => {
+    if (launchingRef.current || cameraStatus !== 'ready') return;
+    const stream = streamRef.current;
+    if (!stream || !stream.getTracks().length || stream.getTracks().some(track => track.readyState !== 'live')) {
+      setLaunchError('الكاميرا أو الميكروفون غير جاهز. أعد تشغيل الكاميرا ثم حاول مرة أخرى.');
+      return;
+    }
+    launchingRef.current = true;
+    setLaunching(true);
+    setLaunchError(null);
+    // Hold devices through a successful parent reroute; revert on failure.
     handedOffRef.current = true;
-    onStart(streamTitle || 'بث مباشر جديد', selectedFilter, filterIntensity, streamRef.current);
+    try {
+      const result = await launchGateRef.current.start(
+        streamTitle || 'بث مباشر جديد', selectedFilter, filterIntensity, stream,
+      );
+      if (result !== 'started') {
+        handedOffRef.current = false;
+        if (unmountedRef.current) stream.getTracks().forEach(track => track.stop());
+        else setLaunchError('تعذر بدء البث على الخادم. تحقق من الإنترنت وحاول مرة أخرى.');
+      }
+    } finally {
+      launchingRef.current = false;
+      if (!unmountedRef.current) setLaunching(false);
+    }
   };
 
   const handleClose = () => {
+    if (launchingRef.current) return;
     handedOffRef.current = false;
     onClose();
   };
@@ -272,11 +319,12 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
           <motion.button
             whileTap={{ scale: 0.98 }}
             onClick={handleStart}
-            disabled={cameraStatus !== 'ready'}
+            disabled={cameraStatus !== 'ready' || launching}
             className="w-full py-3.5 bg-gradient-to-r from-rose-500 to-pink-500 rounded-2xl font-black text-sm tracking-wide shadow-lg shadow-rose-500/20 disabled:opacity-40"
           >
-            بدء البث المباشر الآن 🚀
+            {launching ? 'جاري بدء البث...' : 'بدء البث المباشر الآن 🚀'}
           </motion.button>
+          {(launchFailure || launchError) && <p role="alert" className="text-red-300 bg-red-950/70 rounded-lg p-2 text-center text-xs">{launchFailure || launchError}</p>}
         </footer>
 
         <AnimatePresence>
@@ -459,11 +507,12 @@ export default function LiveStreamStudio({ onClose, onStart }: LiveStreamStudioP
           whileHover={{ scale: 1.02, y: -2 }}
           whileTap={{ scale: 0.98 }}
           onClick={handleStart}
-          disabled={cameraStatus !== 'ready'}
+          disabled={cameraStatus !== 'ready' || launching}
           className="w-full py-4 bg-gradient-to-r from-rose-500 via-pink-500 to-purple-600 rounded-2xl font-black text-sm tracking-wide shadow-lg shadow-rose-500/20 hover:shadow-rose-500/30 transition-all text-white disabled:opacity-40"
         >
-          نشر وإطلاق البث الآن 🚀
+          {launching ? 'جاري بدء البث...' : 'نشر وإطلاق البث الآن 🚀'}
         </motion.button>
+        {(launchFailure || launchError) && <p role="alert" className="text-red-300 bg-red-950/70 rounded-lg p-3 text-center text-xs">{launchFailure || launchError}</p>}
       </aside>
 
     </div>

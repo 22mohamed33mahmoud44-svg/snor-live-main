@@ -1,12 +1,16 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { supabase } from '../../supabase'; // تأكد من صحة مسار ملف سيرفر Supabase الخاص بك
+import { supabase } from '../../supabase';
+import { createCallMessageSender } from '../../utils/callMessageSender';
+import { createStreamLikeBatcher } from '../../utils/streamLikeBatcher';
+import { addStreamLikeBatch, reconcileStreamLikeSnapshot, safeStreamLikeBatchCount } from '../../utils/streamLikeCounter';
+import { acknowledgeStreamChatMessage, mergeStreamChatHistory } from '../../utils/mergeStreamChatHistory';
 import { motion, AnimatePresence } from 'framer-motion';
 // تم إزالة الأيقونة 'X' غير المستخدمة لتنظيف الكود
 import { Heart, Users, Gift, Sparkles } from 'lucide-react';
 
 // استيراد مكونات LiveKit الحديثة
-import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useTracks, type TrackReference } from '@livekit/components-react';
+import { LiveKitRoom, RoomAudioRenderer, StartAudio, VideoTrack, useTracks, type TrackReference } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import '@livekit/components-styles';
 
@@ -32,6 +36,7 @@ interface ChatMessage {
   user_id: string;
   username: string;
   message: string;
+  created_at?: string;
 }
 
 interface FloatingHeart {
@@ -54,10 +59,13 @@ type RealtimeChatMessage = {
   user_id: string;
   username: string;
   message: string;
+  created_at?: string;
 };
 
 
 const MESSAGES_LIMIT = 30;
+const VIEWER_TOKEN_TIMEOUT_MS = 20_000;
+const VIEWER_MEDIA_TIMEOUT_MS = 30_000;
 const HEART_EMOJIS = ['💖', '🔥', '✨', '❤️', '😍'];
 
 export default function ViewerLiveRoom({
@@ -68,6 +76,22 @@ export default function ViewerLiveRoom({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const messageSender = useMemo(() => createCallMessageSender<ChatMessage>(async (message: string) => {
+    // Return the saved row as well as the write result so our optimistic
+    // bubble can acquire its permanent DB ID without waiting for Realtime.
+    const { data, error } = await supabase.from('stream_chat').insert([{
+      stream_id: streamId, user_id: myUserId,
+      username: myUsername || 'متابع', message,
+    }])
+      .select('id, stream_id, user_id, username, message, created_at')
+      .single();
+
+    return {
+      data,
+      // Even a zero-row success cannot confirm the ID of a sent message.
+      error: error ?? (!data?.id ? new Error('Missing persisted stream_chat ID') : null),
+    };
+  }), [streamId, myUserId, myUsername]);
   const [viewersCount, setViewersCount] = useState(1);
   const [likesCount, setLikesCount] = useState(0);
   const [floatingHearts, setFloatingHearts] = useState<FloatingHeart[]>([]);
@@ -85,11 +109,46 @@ export default function ViewerLiveRoom({
 
   // 🔑 حالة توكن LiveKit الجديد
   const [liveKitToken, setLiveKitToken] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [mediaConnected, setMediaConnected] = useState(false);
+  // Every rendered LiveKit room has a unique identity. A late disconnect
+  // from an already-unmounted room must not damage a newer connection.
+  const roomAttemptId = `${streamId}-${myUsername}-${connectionAttempt}`;
+  const activeRoomAttemptRef = useRef(roomAttemptId);
+  activeRoomAttemptRef.current = roomAttemptId;
 
   // مراجع لتحسين الأداء (Ref)
   const roomChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const timeoutsRef = useRef<number[]>([]);
-  const pendingLikesRef = useRef(0); // مرجع لتخزين الإعجابات المتراكمة لمنع الـ DDoS
+  // A failed database write must keep the pending count for a later attempt.
+  const likeBatcher = useMemo(() => createStreamLikeBatcher(async (count: number) => {
+    const channelAtFlush = roomChannelRef.current;
+    const { error } = await supabase.rpc('increment_stream_likes', {
+      target_stream_id: streamId,
+      increment_count: count,
+    });
+    if (error) {
+      console.error('فشل إرسال الإعجابات:', error);
+      return false;
+    }
+    // Notify other viewers only after the database confirmed the count.
+    // Never post an old stream's likes into a newly mounted room channel.
+    if (channelAtFlush && roomChannelRef.current === channelAtFlush) {
+      try {
+        void channelAtFlush.send({
+          type: 'broadcast', event: 'like_batch', payload: { count },
+        }).catch(error => {
+          console.warn('Like broadcast notification failed after saving:', error);
+        });
+      } catch (error) {
+        // Broadcast is cosmetic: a notification failure must not retry a
+        // database write that already succeeded and double-count likes.
+        console.warn('Like broadcast unavailable after saving:', error);
+      }
+    }
+    return true;
+  }), [streamId]);
 
   const identityRef = useRef({ myUserId, myUsername, streamerId });
   useEffect(() => {
@@ -110,9 +169,18 @@ export default function ViewerLiveRoom({
     safeTimeout(() => setToast(null), 2500);
   }, [safeTimeout]);
 
-  // 🚀 تأثير جلب توكن LiveKit من الـ Edge Function تلقائياً
+  // A token failure must not leave the viewer on an endless spinner.
+  // Old requests are ignored if the viewer retries or changes streams.
   useEffect(() => {
     let isCancelled = false;
+    setLiveKitToken(null);
+    setMediaConnected(false);
+    setConnectionError(null);
+
+    const tokenTimeout = window.setTimeout(() => {
+      isCancelled = true;
+      setConnectionError('انتهت مهلة تجهيز البث. تأكد من الإنترنت وأعد المحاولة.');
+    }, VIEWER_TOKEN_TIMEOUT_MS);
 
     async function fetchLiveKitToken() {
       try {
@@ -120,32 +188,68 @@ export default function ViewerLiveRoom({
           body: {
             room: streamId,
             username: myUsername || 'متابع',
-            isStreamer: false
-          }
+            isStreamer: false,
+          },
         });
-
         if (isCancelled) return;
-
-        if (funcError) throw funcError;
-        if (data && data.token) {
-          setLiveKitToken(data.token);
-        } else {
-          throw new Error('تعذر استلام مفتاح الاتصال بالبث');
+        if (funcError || !data?.token) {
+          throw funcError ?? new Error('No live stream token returned');
         }
-      } catch (err: unknown) {
-        if (!isCancelled) {
-          console.error('LiveKit Token Fetch Error:', err);
-          showToast(err instanceof Error ? err.message : 'فشل الاتصال بسيرفر البث الرئيسي');
-        }
+        // A canceled/older request must never install a room token.
+        setLiveKitToken(data.token);
+      } catch (error) {
+        if (isCancelled) return;
+        console.error('LiveKit viewer token request failed:', error);
+        setConnectionError('تعذر تجهيز اتصال البث. تأكد من الإنترنت وأعد المحاولة.');
+      } finally {
+        window.clearTimeout(tokenTimeout);
       }
     }
 
-    fetchLiveKitToken();
-
+    void fetchLiveKitToken();
     return () => {
       isCancelled = true;
+      window.clearTimeout(tokenTimeout);
     };
-  }, [streamId, myUsername, showToast]);
+  }, [streamId, myUsername, connectionAttempt]);
+
+  const handleMediaConnected = useCallback((attemptId: string) => {
+    if (activeRoomAttemptRef.current !== attemptId) return;
+    setMediaConnected(true);
+    setConnectionError(null);
+  }, []);
+
+  const handleMediaError = useCallback((attemptId: string, error: Error) => {
+    if (activeRoomAttemptRef.current !== attemptId) return;
+    console.error('LiveKit viewer connection failed:', error);
+    setMediaConnected(false);
+    setConnectionError('تعذر الاتصال بخادم البث. حاول إعادة الاتصال.');
+  }, []);
+
+  const handleMediaDisconnected = useCallback((attemptId: string) => {
+    if (activeRoomAttemptRef.current !== attemptId) return;
+    setMediaConnected(false);
+    setConnectionError('انقطع الاتصال بالبث. حاول إعادة الاتصال.');
+  }, []);
+
+  // Catch silent room-connection stalls that emit no error event.
+  useEffect(() => {
+    if (!liveKitToken || mediaConnected || connectionError) return;
+    const timeout = window.setTimeout(() => {
+      setConnectionError('تأخر الاتصال بالبث. جرّب إعادة الاتصال.');
+    }, VIEWER_MEDIA_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [liveKitToken, mediaConnected, connectionError]);
+
+  const retryConnection = useCallback(() => {
+    // Invalidate callbacks synchronously BEFORE unmounting the old room.
+    // Otherwise its onDisconnected can overwrite the fresh retry's state.
+    activeRoomAttemptRef.current = `${streamId}-${myUsername}-${connectionAttempt + 1}`;
+    setConnectionError(null);
+    setMediaConnected(false);
+    setLiveKitToken(null);
+    setConnectionAttempt(attempt => attempt + 1);
+  }, [streamId, myUsername, connectionAttempt]);
 
   const spawnHeart = useCallback((clientX?: number, emoji?: string) => {
     const heart: FloatingHeart = {
@@ -188,25 +292,36 @@ export default function ViewerLiveRoom({
     const currentMyUserId = identityRef.current.myUserId;
 
     const fetchOldMessages = async () => {
-      const { data, error } = await supabase
-        .from('stream_chat')
-        .select('*')
-        .eq('stream_id', streamId)
-        .order('created_at', { ascending: true })
-        .limit(MESSAGES_LIMIT);
+      try {
+        const { data, error } = await supabase
+          .from('stream_chat')
+          .select('*')
+          .eq('stream_id', streamId)
+          .order('created_at', { ascending: false })
+          .limit(MESSAGES_LIMIT);
 
-      if (error) {
-        if (isMounted) showToast('تعذر تحميل الرسائل القديمة');
-        return;
-      }
-      if (data && isMounted) {
-        setMessages(data.map(m => ({
-          id: m.id, stream_id: m.stream_id, user_id: m.user_id, username: m.username, message: m.message
-        })));
+        if (error) {
+          if (isMounted) showToast('تعذر تحميل الرسائل القديمة');
+          return;
+        }
+        if (data && isMounted) {
+          const recentHistory: ChatMessage[] = data.slice().reverse().map(m => ({
+            id: m.id, stream_id: m.stream_id, user_id: m.user_id,
+            username: m.username, message: m.message, created_at: m.created_at,
+          }));
+          // Merge messages received during the query, or acknowledged
+          // locally, rather than replacing them with a stale snapshot.
+          setMessages(current => mergeStreamChatHistory(recentHistory, current, MESSAGES_LIMIT));
+        }
+      } catch (error) {
+        // Network rejects also happen during Realtime reconnect. Do not let
+        // a rejected history fetch become an unhandled promise rejection.
+        if (isMounted) {
+          console.warn('Viewer chat history request failed:', error);
+          showToast('تعذر تحميل الرسائل القديمة');
+        }
       }
     };
-
-    fetchOldMessages();
 
     const roomChannel = supabase.channel(`room-${streamId}`, {
       config: { presence: { key: currentMyUserId }, broadcast: { self: false } },
@@ -219,18 +334,22 @@ export default function ViewerLiveRoom({
         if (!isMounted) return;
         const newMsg = payload.new as RealtimeChatMessage;
         if (newMsg.user_id === currentMyUserId) return;
-        setMessages(prev => [...prev.slice(-(MESSAGES_LIMIT - 1)), newMsg]);
+        setMessages(prev => prev.some(m => m.id === newMsg.id)
+          ? prev
+          : [...prev.slice(-(MESSAGES_LIMIT - 1)), newMsg]);
       })
       // استقبال دفعة الإعجابات (Batching) لحماية الواجهة من الانهيار
       .on('broadcast', { event: 'like_batch' }, ({ payload }) => {
         if (!isMounted) return;
-        const count = payload?.count || 1;
-        setLikesCount(prev => prev + count);
-        
-        // رسم قلبين كحد أقصى لتخفيف العبء على معالج الموبايل
-        const heartsToSpawn = Math.min(count, 2); 
-        for(let i = 0; i < heartsToSpawn; i++) {
-          setTimeout(() => spawnHeart(), i * 200);
+        const count = safeStreamLikeBatchCount(payload?.count);
+        if (count === 0) return;
+        setLikesCount(prev => addStreamLikeBatch(prev, count));
+
+        // Spawn at most two hearts; never allocate animations according to
+        // an untrusted broadcast payload.
+        const heartsToSpawn = Math.min(count, 2);
+        for (let i = 0; i < heartsToSpawn; i++) {
+          safeTimeout(() => { if (isMounted) spawnHeart(); }, i * 200);
         }
       })
       .on('broadcast', { event: 'gift' }, ({ payload }) => {
@@ -249,14 +368,21 @@ export default function ViewerLiveRoom({
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED' && isMounted) {
-          roomChannel.track({ 
-            user_id: currentMyUserId, username: identityRef.current.myUsername, role: 'viewer', online_at: new Date().toISOString() 
+          // Subscribe BEFORE reading history. Otherwise a message committed
+          // between the initial SELECT and active Realtime subscription is
+          // invisible until another refresh. Backfill on reconnect as well.
+          void roomChannel.track({
+            user_id: currentMyUserId, username: identityRef.current.myUsername, role: 'viewer', online_at: new Date().toISOString()
           });
+          void fetchOldMessages();
         }
       });
 
     supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data }) => {
-      if (isMounted && data?.likes_count != null) setLikesCount(data.likes_count);
+      if (isMounted && data?.likes_count != null) {
+        // A late snapshot must not overwrite newer local taps/broadcasts.
+        setLikesCount(current => reconcileStreamLikeSnapshot(current, data.likes_count));
+      }
     });
 
     return () => {
@@ -267,42 +393,18 @@ export default function ViewerLiveRoom({
     };
   }, [streamId, safeTimeout, showToast, spawnHeart, showGiftToast, triggerSparkleBurst, reconnectKey]);
 
-  // 🔄 عامل الخلفية (Worker) لإرسال الإعجابات كدفعة واحدة كل ثانيتين (تم إصلاح خطأ TypeScript هنا)
+  // Periodic batches are single-flight. Failed writes remain buffered for
+  // a later tick, and cleanup attempts one final best-effort flush.
   useEffect(() => {
-    let isMounted = true;
-    
-    const flushLikes = async () => {
-      const likesToSend = pendingLikesRef.current;
-      if (likesToSend > 0 && isMounted) {
-        pendingLikesRef.current = 0; // تصفير العداد للدفعة القادمة
+    const intervalId = window.setInterval(() => {
+      void likeBatcher.flush();
+    }, 2000);
 
-        // بث العدد كرسالة واحدة
-        roomChannelRef.current?.send({ 
-          type: 'broadcast', 
-          event: 'like_batch', 
-          payload: { count: likesToSend } 
-        });
-
-        // اتصال واحد فقط بقاعدة البيانات بطريقة نظيفة خالية من أخطاء TypeScript
-        const { error } = await supabase.rpc('increment_stream_likes', { 
-          target_stream_id: streamId,
-          increment_count: likesToSend 
-        });
-
-        if (error) {
-           console.error("فشل إرسال الإعجابات:", error);
-        }
-      }
-    };
-
-    const intervalId = setInterval(flushLikes, 2000);
-    
     return () => {
-      isMounted = false;
-      clearInterval(intervalId);
-      flushLikes(); // إرسال الإعجابات المتبقية قبل الخروج
+      window.clearInterval(intervalId);
+      void likeBatcher.finish();
     };
-  }, [streamId]);
+  }, [likeBatcher]);
 
   // جلب رصيد الجواهر والمتابعة
   useEffect(() => {
@@ -321,35 +423,42 @@ export default function ViewerLiveRoom({
 
   const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const text = newMessage.trim();
-    if (!text || sending) return;
+    const draft = newMessage;
+    const text = draft.trim();
+    if (!text || messageSender.isSending()) return;
 
     setSending(true);
-    setNewMessage('');
-    const localId = Date.now().toString();
-
+    const localId = `pending-${Date.now()}-${Math.random()}`;
     setMessages(prev => [...prev.slice(-(MESSAGES_LIMIT - 1)), {
-      id: localId, stream_id: streamId, user_id: myUserId, username: 'أنت', message: text
+      id: localId, stream_id: streamId, user_id: myUserId, username: 'أنت', message: text,
     }]);
 
-    const { error } = await supabase
-      .from('stream_chat')
-      .insert([{ stream_id: streamId, user_id: myUserId, username: myUsername || 'متابع', message: text }]);
-
-    setSending(false);
-    if (error) {
-      showToast('فشل إرسال الرسالة');
-      setMessages(prev => prev.filter(m => m.id !== localId));
-      setNewMessage(text);
+    try {
+      const result = await messageSender.send(text);
+      if (result.status === 'sent' && result.data?.id) {
+        // Replace only this outgoing pending bubble with the saved server
+        // message ID. Future history refreshes now deduplicate it correctly.
+        setMessages(current => acknowledgeStreamChatMessage(
+          current, localId, result.data!, MESSAGES_LIMIT,
+        ));
+        // Never wipe more recent text typed while the server was working.
+        setNewMessage(current => current === draft ? '' : current);
+      } else {
+        setMessages(prev => prev.filter(message => message.id !== localId));
+        // The input was never cleared, so an unsuccessful message remains.
+        showToast('تعذر إرسال الرسالة. النص محفوظ لإعادة المحاولة.');
+      }
+    } finally {
+      setSending(false);
     }
   };
 
   // 🚀 دالة الإعجاب المحسنة (لا ترسل للسيرفر، تضيف للذاكرة فقط)
   const sendLike = useCallback((clientX?: number) => {
-    setLikesCount(prev => prev + 1);
+    setLikesCount(prev => addStreamLikeBatch(prev, 1));
     spawnHeart(clientX);
-    pendingLikesRef.current += 1;
-  }, [spawnHeart]);
+    likeBatcher.add();
+  }, [spawnHeart, likeBatcher]);
 
   const handleScreenTap = (e: React.MouseEvent) => { sendLike(e.clientX); };
 
@@ -401,9 +510,18 @@ export default function ViewerLiveRoom({
           type: 'broadcast', event: 'gift', payload: { senderName: myUsername || 'متابع', emoji: gift.emoji, giftName: gift.name }
         });
       } else {
-        showToast('فشلت العملية، تحقق من الرصيد');
+        const reason = data?.error;
+        if (reason === 'gift_price_changed' || reason === 'gift_unavailable') {
+          showToast('تم تحديث أسعار الهدايا. افتح لوحة الهدايا مجدداً.');
+        } else if (reason === 'insufficient_coins') {
+          showToast('الرصيد غير كافٍ لإرسال هذه الهدية.');
+        } else {
+          console.error('Gift purchase failed', error ?? reason);
+          showToast('تعذر إرسال الهدية. حاول مرة أخرى.');
+        }
       }
     } catch (err) {
+      console.error('Gift purchase failed', err);
       showToast('حدث خطأ غير متوقع');
     }
   };
@@ -419,10 +537,33 @@ export default function ViewerLiveRoom({
         {/* 📺 طبقة مشغل البث والتفاعل */}
         {/* تم إضافة WebkitTapHighlightColor لمنع ظهور المربع الأزرق المزعج عند النقر المستمر على الموبايل */}
         <div onClick={handleScreenTap} style={{ position: 'absolute', inset: 0, zIndex: 1, cursor: 'pointer', background: '#000', WebkitTapHighlightColor: 'transparent' }}>
-          {liveKitToken ? (
+          {connectionError ? (
+            <div
+              role="alert"
+              onClick={e => e.stopPropagation()}
+              style={{
+                height: '100%', display: 'flex', flexDirection: 'column',
+                justifyContent: 'center', alignItems: 'center', gap: 16,
+                padding: 24, textAlign: 'center', color: '#fff',
+                background: 'linear-gradient(to bottom, #110e26, #03030a)',
+              }}
+            >
+              <Users size={46} style={{ color: '#fca5a5' }} />
+              <strong style={{ fontSize: '1.1rem' }}>تعذر تشغيل البث</strong>
+              <p style={{ color: '#e2e8f0', fontSize: '.85rem', margin: 0 }}>{connectionError}</p>
+              <button type="button" onClick={retryConnection} style={{ padding: '12px 22px', borderRadius: 12, background: '#0e7490', color: '#fff', border: 0, fontWeight: 700, cursor: 'pointer' }}>إعادة الاتصال</button>
+              <button type="button" onClick={onExit} style={{ padding: '10px 20px', borderRadius: 12, color: '#e2e8f0', background: 'rgba(255,255,255,.12)', border: 0, cursor: 'pointer' }}>الرجوع</button>
+            </div>
+          ) : liveKitToken ? (
             <LiveKitRoom
+              key={roomAttemptId}
+              onConnected={() => handleMediaConnected(roomAttemptId)}
+              onDisconnected={() => handleMediaDisconnected(roomAttemptId)}
+              onError={(error) => handleMediaError(roomAttemptId, error)}
               video={false}
-              audio={true}
+              // Viewers subscribe to broadcaster tracks; they must never
+              // request/publish microphone or camera tracks themselves.
+              audio={false}
               token={liveKitToken}
               serverUrl={import.meta.env.VITE_LIVEKIT_URL}
               connect={true}
@@ -430,6 +571,26 @@ export default function ViewerLiveRoom({
             >
               <LiveStreamVideoRenderer />
               <RoomAudioRenderer />
+              {/* Browsers may block remote audio until a viewer clicks. */}
+              <StartAudio
+                label="اضغط لتشغيل صوت البث"
+                style={{
+                  position: 'absolute',
+                  top: '42%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  zIndex: 30,
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: 12,
+                  background: '#0e7490',
+                  color: '#fff',
+                  fontFamily: 'Cairo, sans-serif',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  padding: '12px 16px',
+                  cursor: 'pointer',
+                }}
+              />
             </LiveKitRoom>
           ) : (
             <div style={{ width: '100%', height: '100%', background: 'linear-gradient(to bottom, #110e26, #03030a)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>

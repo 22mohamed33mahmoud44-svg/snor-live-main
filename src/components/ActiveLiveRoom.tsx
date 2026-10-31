@@ -1,8 +1,13 @@
 
-import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { supabase } from '../supabase';
-import { LiveKitRoom, useRoomContext } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
+import { createCallMessageSender } from '../utils/callMessageSender';
+import { createCancelableMediaCapture } from '../utils/cancelableMediaCapture';
+import { addStreamLikeBatch, reconcileStreamLikeSnapshot } from '../utils/streamLikeCounter';
+import { mergeStreamChatHistory, acknowledgeStreamChatMessage } from '../utils/mergeStreamChatHistory';
+import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
+import { Track, ConnectionState } from 'livekit-client';
 
 interface ActiveLiveRoomProps {
   streamId: string;
@@ -21,6 +26,7 @@ interface ChatMessage {
   text: string;
   color: string;
   isOptimistic?: boolean;
+  created_at?: string;
 }
 
 interface GiftToast {
@@ -44,6 +50,7 @@ type StreamChatMessage = {
   user_id: string;
   username: string;
   message: string;
+  created_at?: string;
 };
 
 const styles = {
@@ -244,36 +251,68 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const MESSAGES_LIMIT = 30;
 
 // ── LiveKit Publisher (يقوم بنشر الكاميرا بأمان) ──
-const StreamPublisher = memo(({ stream }: { stream: MediaStream | null }) => {
+const StreamPublisher = memo(({
+  stream, onPublished, onPublishError,
+}: {
+  stream: MediaStream | null;
+  onPublished: () => void;
+  onPublishError: (error: Error) => void;
+}) => {
   const room = useRoomContext();
-  
+  const connectionState = useConnectionState();
+
   useEffect(() => {
-    if (!room || !stream) return;
+    // A LiveKitRoom can render before its websocket is connected. Publishing
+    // there fails and does not automatically retry without this state check.
+    if (!stream || connectionState !== ConnectionState.Connected) return;
+    let disposed = false;
+
     const publishTracks = async () => {
       try {
-        for (const track of stream.getTracks()) {
+        const liveTracks = stream.getTracks().filter(track => track.readyState === 'live');
+        if (!liveTracks.length) throw new Error('No active broadcaster media tracks');
+        for (const track of liveTracks) {
+          if (disposed || track.readyState !== 'live') return;
+          const source = track.kind === 'video' ? Track.Source.Camera : Track.Source.Microphone;
+          // LiveKit may restore publications itself after reconnecting.
+          if (room.localParticipant.getTrackPublication(source)) continue;
           await room.localParticipant.publishTrack(track, {
-            simulcast: true,
-            source: track.kind === 'video' ? Track.Source.Camera : Track.Source.Microphone
+            simulcast: track.kind === 'video',
+            source,
           });
+          if (disposed) {
+            const pub = room.localParticipant.getTrackPublication(source);
+            if (pub?.track?.mediaStreamTrack === track) {
+              await room.localParticipant.unpublishTrack(pub.track, false);
+            }
+            return;
+          }
         }
-      } catch (e) {
-        console.error("خطأ في نشر البث لخوادم LiveKit:", e);
+        if (!disposed) onPublished();
+      } catch (error) {
+        if (!disposed) {
+          console.error('تعذر نشر كاميرا أو ميكروفون البث:', error);
+          onPublishError(error instanceof Error ? error : new Error(String(error)));
+        }
       }
     };
-    publishTracks();
-    
+
+    void publishTracks();
     return () => {
-      // إيقاف النشر عند الخروج لتنظيف الذاكرة
-      stream.getTracks().forEach(track => {
+      disposed = true;
+      for (const track of stream.getTracks()) {
         const source = track.kind === 'video' ? Track.Source.Camera : Track.Source.Microphone;
-        const publication = room.localParticipant.getTrackPublication(source);
-        if (publication && publication.track) {
-          room.localParticipant.unpublishTrack(publication.track);
+        const pub = room.localParticipant.getTrackPublication(source);
+        if (pub?.track?.mediaStreamTrack === track) {
+          // The studio owns this MediaStream. Do not stop its device tracks
+          // during a temporary reconnect or effect teardown.
+          void room.localParticipant.unpublishTrack(pub.track, false).catch(error => {
+            console.error('تعذر إلغاء نشر مسار البث:', error);
+          });
         }
-      });
+      }
     };
-  }, [room, stream]);
+  }, [room, stream, connectionState, onPublished, onPublishError]);
 
   return null;
 });
@@ -342,34 +381,57 @@ const ChatMessageList = memo(({
 });
 
 // ── ChatInputArea ──
-const ChatInputArea = memo(({ onSendMessage }: { onSendMessage: (text: string) => void }) => {
+// Keep an unsent draft in place until Supabase acknowledges the write.
+const ChatInputArea = memo(({ onSendMessage }: { onSendMessage: (text: string) => Promise<boolean> }) => {
   const [chatInput, setChatInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const sendingRef = useRef(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const trimmed = chatInput.trim();
-    if (!trimmed) return;
-    onSendMessage(trimmed);
-    setChatInput('');
+    const draft = chatInput;
+    if (!draft.trim() || sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    setSendError(null);
+    try {
+      if (await onSendMessage(draft)) {
+        // If the streamer typed more while the insert was pending, keep it.
+        setChatInput(current => current === draft ? '' : current);
+      } else {
+        setSendError('تعذر إرسال الرسالة. النص محفوظ هنا لإعادة المحاولة.');
+      }
+    } catch (error) {
+      console.error('Stream chat submission failed:', error);
+      setSendError('تعذر إرسال الرسالة. النص محفوظ هنا لإعادة المحاولة.');
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
   };
 
   return (
-    <div style={styles.chatInputRow}>
-      <input
-        type="text"
-        value={chatInput}
-        onChange={e => setChatInput(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && handleSubmit(e as React.FormEvent)}
-        placeholder="تحدث مع المتابعين..."
-        style={styles.chatInput}
-      />
-      <button onClick={handleSubmit} style={styles.chatSendBtn} aria-label="إرسال">💬</button>
-    </div>
+    <form style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }} onSubmit={e => { void handleSubmit(e); }}>
+      <div style={styles.chatInputRow}>
+        <input
+          type="text"
+          value={chatInput}
+          onChange={e => { setChatInput(e.target.value); if (sendError) setSendError(null); }}
+          placeholder="تحدث مع المتابعين..."
+          style={styles.chatInput}
+        />
+        <button type="submit" disabled={sending || !chatInput.trim()} style={{ ...styles.chatSendBtn, opacity: sending ? 0.5 : 1 }} aria-label="إرسال">
+          {sending ? '…' : '💬'}
+        </button>
+      </div>
+      {sendError && <p role="alert" style={{ color: '#fecaca', background: 'rgba(127,29,29,.6)', borderRadius: 8, padding: '6px 10px', fontSize: '.75rem', margin: 0 }}>{sendError}</p>}
+    </form>
   );
 });
 
 // ── EndStreamModal ──
-const EndStreamModal = memo(({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) => (
+const EndStreamModal = memo(({ onConfirm, onCancel, pending, error }: { onConfirm: () => void; onCancel: () => void; pending: boolean; error: string | null }) => (
   <div style={{
     position: 'fixed', inset: 0, zIndex: 9999,
     background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)',
@@ -392,9 +454,10 @@ const EndStreamModal = memo(({ onConfirm, onCancel }: { onConfirm: () => void; o
           سيتم قطع الاتصال بجميع المشاهدين
         </p>
       </div>
+      {error && <p role="alert" style={{ color: '#fecaca', fontSize: '0.85rem', textAlign: 'center', margin: 0 }}>{error}</p>}
       <div style={{ display: 'flex', gap: 10 }}>
-        <button onClick={onCancel} style={{ flex: 1, padding: '13px', borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#fff', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'Cairo', sans-serif", touchAction: 'manipulation' }}>تراجع</button>
-        <button onClick={onConfirm} style={{ flex: 1, padding: '13px', borderRadius: '12px', background: 'linear-gradient(135deg, #ef4444, #dc2626)', border: 'none', color: '#fff', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'Cairo', sans-serif", boxShadow: '0 4px 15px rgba(239,68,68,0.35)', touchAction: 'manipulation' }}>إنهاء البث</button>
+        <button disabled={pending} onClick={onCancel} style={{ flex: 1, padding: '13px', borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#fff', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'Cairo', sans-serif", touchAction: 'manipulation' }}>تراجع</button>
+        <button disabled={pending} onClick={onConfirm} style={{ flex: 1, padding: '13px', borderRadius: '12px', background: 'linear-gradient(135deg, #ef4444, #dc2626)', border: 'none', color: '#fff', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'Cairo', sans-serif", boxShadow: '0 4px 15px rgba(239,68,68,0.35)', touchAction: 'manipulation' }}>{pending ? 'جاري تأكيد الإنهاء...' : 'إنهاء البث'}</button>
       </div>
     </div>
   </div>
@@ -414,14 +477,27 @@ export default function ActiveLiveRoom({
   const [banToast, setBanToast]             = useState<string | null>(null);
   const [selectedMsgId, setSelectedMsgId]   = useState<string | null>(null);
   const [showEndModal, setShowEndModal]     = useState(false);
+  const [endingStream, setEndingStream]     = useState(false);
+  const [endError, setEndError]             = useState<string | null>(null);
   const [cameraReady, setCameraReady]       = useState(false);
+  const [captureError, setCaptureError]     = useState<string | null>(null);
+  const [cameraAttempt, setCameraAttempt]   = useState(0);
   const [liveKitToken, setLiveKitToken]     = useState<string | null>(null);
+  const [liveKitError, setLiveKitError]     = useState<string | null>(null);
+  const [mediaPublished, setMediaPublished] = useState(false);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  // Room events and publisher callbacks belong to a specific attempt.
+  // Reconnection must never let stale events mark the new room LIVE/failed.
+  const roomAttemptId = `${streamId}-${connectionAttempt}`;
+  const activeRoomAttemptRef = useRef(roomAttemptId);
+  activeRoomAttemptRef.current = roomAttemptId;
 
   const videoRef            = useRef<HTMLVideoElement>(null);
   const streamRef           = useRef<MediaStream | null>(null);
   const roomChannelRef      = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const heartbeatRef        = useRef<ReturnType<typeof setInterval> | null>(null);
   const heartbeatRunning    = useRef(false);
+  const endingRef          = useRef(false);
 
   const filtersList = [
     { id: 'natural',    effect: 'none' },
@@ -433,22 +509,89 @@ export default function ActiveLiveRoom({
   ];
   const activeFilterEffect = filtersList.find(f => f.id === filterId)?.effect ?? 'none';
 
-  // ── جلب توكن LiveKit للمذيع ──
+  // A missing LiveKit token must not leave the broadcaster looking LIVE.
   useEffect(() => {
-    let isCancelled = false;
+    let cancelled = false;
+    setLiveKitToken(null);
+    setLiveKitError(null);
+    setMediaPublished(false);
+
+    const tokenTimeout = window.setTimeout(() => {
+      cancelled = true;
+      setLiveKitError('انتهت مهلة الاتصال بخادم البث. أعد المحاولة أو أنهِ البث.');
+    }, 20_000);
+
     async function fetchToken() {
       try {
-        const { data } = await supabase.functions.invoke('livekit-token', {
-          body: { room: streamId, username: myUsername || 'المذيع', isStreamer: true }
+        const { data, error } = await supabase.functions.invoke('livekit-token', {
+          body: { room: streamId, username: myUsername || 'المذيع', isStreamer: true },
         });
-        if (!isCancelled && data?.token) setLiveKitToken(data.token);
-      } catch (e) {
-        console.error("LiveKit Token error", e);
+        if (cancelled) return;
+        if (error || !data?.token) throw error ?? new Error('Missing broadcaster LiveKit token');
+        setLiveKitToken(data.token);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Broadcaster LiveKit token failed:', error);
+          setLiveKitError('تعذر تجهيز البث على الخادم. أعد المحاولة أو أنهِ البث.');
+        }
+      } finally {
+        window.clearTimeout(tokenTimeout);
       }
     }
-    fetchToken();
-    return () => { isCancelled = true; };
-  }, [streamId, myUsername]);
+
+    void fetchToken();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(tokenTimeout);
+    };
+  }, [streamId, myUsername, connectionAttempt]);
+
+  const handleMediaPublished = useCallback((attemptId: string) => {
+    if (activeRoomAttemptRef.current !== attemptId || endingRef.current) return;
+    setMediaPublished(true);
+    setLiveKitError(null);
+  }, []);
+
+  const handleMediaFailure = useCallback((attemptId: string, error: Error) => {
+    if (activeRoomAttemptRef.current !== attemptId || endingRef.current) return;
+    console.error('Broadcaster LiveKit media failure:', error);
+    setMediaPublished(false);
+    setLiveKitError('تعذر توصيل الصوت أو الصورة للمشاهدين. أعد الاتصال أو أنهِ البث.');
+  }, []);
+
+  // Publisher effects depend on callback identity. Stable callbacks prevent
+  // a one-second uptime/chat/like re-render from unpublishing and republishing
+  // camera/mic tracks over and over during a healthy connection.
+  const onPublishedForAttempt = useCallback(() => {
+    handleMediaPublished(roomAttemptId);
+  }, [handleMediaPublished, roomAttemptId]);
+  const onPublishErrorForAttempt = useCallback((error: Error) => {
+    handleMediaFailure(roomAttemptId, error);
+  }, [handleMediaFailure, roomAttemptId]);
+
+  // Waiting for a token, a WebSocket, or a track publish must be bounded.
+  useEffect(() => {
+    if (!liveKitToken || mediaPublished || liveKitError) return;
+    const watchdog = window.setTimeout(() => {
+      if (activeRoomAttemptRef.current !== roomAttemptId || endingRef.current) return;
+      setLiveKitError('تأخر نشر البث للمشاهدين. جرّب إعادة الاتصال.');
+    }, 35_000);
+    return () => window.clearTimeout(watchdog);
+  }, [liveKitToken, mediaPublished, liveKitError, roomAttemptId]);
+
+  const retryMediaConnection = useCallback(() => {
+    // Invalidate old LiveKitRoom/StreamPublisher callbacks BEFORE the old
+    // room is unmounted and its onDisconnected fires.
+    activeRoomAttemptRef.current = `${streamId}-${connectionAttempt + 1}`;
+    setMediaPublished(false);
+    setLiveKitError(null);
+    setCaptureError(null);
+    setLiveKitToken(null);
+    // Refresh device permissions as well as the LiveKit connection when
+    // the camera itself failed. A token-only retry could never fix it.
+    if (!initialStream && !cameraReady) setCameraAttempt(attempt => attempt + 1);
+    setConnectionAttempt(attempt => attempt + 1);
+  }, [initialStream, cameraReady, streamId, connectionAttempt]);
 
   // ── Heartbeat ──
   const sendHeartbeat = useCallback(async () => {
@@ -473,41 +616,77 @@ export default function ActiveLiveRoom({
 
   // ── إنهاء البث بأمان ──
   const endStreamSafely = useCallback(async () => {
-    stopHeartbeat();
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    await supabase
-      .from('live_streams')
-      .update({ is_live: false, last_heartbeat_at: new Date().toISOString() })
-      .eq('id', streamId)
-      .eq('user_id', String(myUserId));
-    onEndStream();
+    if (endingRef.current) return;
+    endingRef.current = true;
+    setEndingStream(true);
+    setEndError(null);
+    try {
+      // Keep publishing and heartbeating until the server confirms the end.
+      // If the write fails or affects zero rows, the broadcaster must be
+      // able to retry instead of leaving a ghost live_streams record.
+      if (!(await endLiveStreamOnServer(streamId, String(myUserId)))) {
+        setEndError('لم يتم تأكيد إنهاء البث على الخادم. تحقق من الإنترنت وحاول مرة أخرى.');
+        return;
+      }
+      stopHeartbeat();
+      streamRef.current?.getTracks().forEach(track => track.stop());
+      onEndStream();
+    } catch (error) {
+      console.error('Stream shutdown failed:', error);
+      setEndError('تعذر تأكيد إنهاء البث. أعد المحاولة.');
+    } finally {
+      endingRef.current = false;
+      setEndingStream(false);
+    }
   }, [streamId, myUserId, stopHeartbeat, onEndStream]);
 
   // ── الكاميرا ──
   useEffect(() => {
+    setCameraReady(false);
+    setCaptureError(null);
+
     if (initialStream) {
       streamRef.current = initialStream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = initialStream;
-        setCameraReady(true);
+      if (videoRef.current) videoRef.current.srcObject = initialStream;
+      const hasLiveTracks = initialStream.getTracks().some(track => track.readyState === 'live');
+      setCameraReady(hasLiveTracks);
+      if (!hasLiveTracks) {
+        setCaptureError('انتهت صلاحية الكاميرا أو الميكروفون. أنهِ البث وأعد المحاولة.');
       }
-    } else {
-      navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', aspectRatio: 9 / 16, width: { ideal: 720, max: 1080 }, height: { ideal: 1280, max: 1920 }, frameRate: { ideal: 24, max: 30 } },
-        audio: true,
-      }).then(stream => {
-        streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
-      }).catch(err => {
-        console.error('الكاميرا غير متاحة:', err);
-        setCameraReady(true);
-      });
+
+      return () => {
+        initialStream.getTracks().forEach(track => track.stop());
+        if (streamRef.current === initialStream) streamRef.current = null;
+        if (videoRef.current) videoRef.current.srcObject = null;
+      };
     }
 
+    const capture = createCancelableMediaCapture(
+      () => navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', aspectRatio: 9 / 16, width: { ideal: 720, max: 1080 }, height: { ideal: 1280, max: 1920 }, frameRate: { ideal: 24, max: 30 } },
+        audio: true,
+      }),
+      stream => {
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+        setCameraReady(true);
+      },
+      error => {
+        console.error('تعذر تشغيل كاميرا أو ميكروفون البث:', error);
+        setCameraReady(false);
+        setCaptureError('تعذر تشغيل الكاميرا أو الميكروفون. تحقق من أذونات المتصفح وأعد المحاولة.');
+      },
+    );
+    void capture.start();
+
     return () => {
-      streamRef.current?.getTracks().forEach(t => t.stop());
+      // Dispose first: a pending getUserMedia may resolve after this cleanup.
+      // The helper stops every late track and ignores old permission errors.
+      capture.dispose();
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [initialStream]);
+  }, [initialStream, cameraAttempt]);
 
   // ── Wake Lock ──
   useEffect(() => {
@@ -535,32 +714,53 @@ export default function ActiveLiveRoom({
   // ── دورة حياة البث + Realtime ──
   useEffect(() => {
     if (!streamId) return;
+    let isMounted = true;
     startHeartbeat();
 
-    supabase.from('stream_chat').select('*').eq('stream_id', streamId).order('created_at', { ascending: true }).limit(MESSAGES_LIMIT)
-      .then(({ data }) => {
-        if (data) setChatMessages(data.map(m => ({ id: m.id, user: m.username, userId: m.user_id, text: m.message, color: m.user_id === myUserId ? '#ff2a74' : '#00d4ff' })));
-      });
+    const fetchOldMessages = async () => {
+      try {
+        const { data, error } = await supabase.from('stream_chat')
+          .select('*').eq('stream_id', streamId)
+          .order('created_at', { ascending: false }).limit(MESSAGES_LIMIT);
+        if (!isMounted) return;
+        if (error) {
+          console.warn('Unable to load broadcaster chat history:', error);
+          return;
+        }
+        if (!data) return;
+        const recentHistory: ChatMessage[] = data.slice().reverse().map(m => ({
+          id: m.id, user: m.username, userId: m.user_id, text: m.message,
+          color: m.user_id === myUserId ? '#ff2a74' : '#00d4ff',
+          created_at: m.created_at,
+        }));
+        // A message may arrive from Realtime while history is in flight.
+        setChatMessages(current => mergeStreamChatHistory(recentHistory, current, MESSAGES_LIMIT));
+      } catch (error) {
+        if (isMounted) console.warn('Broadcaster chat history request failed:', error);
+      }
+    };
 
     const roomChannel = supabase.channel(`room-${streamId}`, { config: { presence: { key: myUserId } } });
     roomChannelRef.current = roomChannel;
 
     roomChannel
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stream_chat', filter: `stream_id=eq.${streamId}` }, (payload) => {
+        if (!isMounted) return;
         const newMsg = payload.new as StreamChatMessage;
-        setChatMessages(prev => {
-          const optimisticIdx = prev.findIndex(m => m.isOptimistic && m.userId === newMsg.user_id && m.text === newMsg.message);
-          const withoutOptimistic = optimisticIdx >= 0 ? prev.filter((_, i) => i !== optimisticIdx) : prev;
-          if (withoutOptimistic.some(m => m.id === newMsg.id)) return prev;
-
-          return [...withoutOptimistic.slice(-(MESSAGES_LIMIT - 1)), {
-            id: newMsg.id, user: newMsg.username, userId: newMsg.user_id, text: newMsg.message,
-            color: newMsg.user_id === myUserId ? '#ff2a74' : '#60a5fa', isOptimistic: false,
-          }];
-        });
+        // Our own inserts are acknowledged with their real DB IDs below.
+        // Avoid guessing which pending bubble matches a repeated text.
+        if (newMsg.user_id === myUserId) return;
+        setChatMessages(prev => mergeStreamChatHistory([{
+          id: newMsg.id, user: newMsg.username, userId: newMsg.user_id, text: newMsg.message,
+          color: '#60a5fa', created_at: newMsg.created_at, isOptimistic: false,
+        }], prev, MESSAGES_LIMIT));
       })
-      .on('broadcast', { event: 'like' }, () => setLikesCount(prev => prev + 1))
-      .on('broadcast', { event: 'like_batch' }, ({ payload }) => setLikesCount(prev => prev + (payload?.count || 1)))
+      .on('broadcast', { event: 'like' }, () => {
+        if (isMounted) setLikesCount(prev => addStreamLikeBatch(prev, 1));
+      })
+      .on('broadcast', { event: 'like_batch' }, ({ payload }) => {
+        if (isMounted) setLikesCount(prev => addStreamLikeBatch(prev, payload?.count));
+      })
       .on('broadcast', { event: 'gift' }, ({ payload }) => {
         setGiftToast({ id: Date.now() + Math.random(), senderName: payload?.senderName, emoji: payload?.emoji, giftName: payload?.giftName });
       })
@@ -575,11 +775,19 @@ export default function ActiveLiveRoom({
         setViewers(Math.max(1, Object.keys(state).length));
       })
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') roomChannel.track({ user_id: String(myUserId), role: 'streamer', online_at: new Date().toISOString() });
+        if (status === 'SUBSCRIBED' && isMounted) {
+          // Backfill after subscription, including each Realtime reconnect,
+          // so there is no SELECT-before-subscribe gap for incoming messages.
+          void roomChannel.track({ user_id: String(myUserId), role: 'streamer', online_at: new Date().toISOString() });
+          void fetchOldMessages();
+        }
       });
 
     supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data }) => {
-      if (data?.likes_count != null) setLikesCount(data.likes_count);
+      if (isMounted && data?.likes_count != null) {
+        // A delayed initial snapshot can be older than realtime like events.
+        setLikesCount(current => reconcileStreamLikeSnapshot(current, data.likes_count));
+      }
     });
 
     const handleVisibilityChange = () => {
@@ -595,6 +803,7 @@ export default function ActiveLiveRoom({
     window.addEventListener('beforeunload', stopHeartbeat);
 
     return () => {
+      isMounted = false;
       stopHeartbeat();
       supabase.removeChannel(roomChannel);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -614,24 +823,45 @@ export default function ActiveLiveRoom({
     return () => clearTimeout(id);
   }, [banToast]);
 
-  // ── القضاء على مشكلة الـ IDs ──
-  const handleSendMessage = useCallback(async (text: string) => {
+  // ── حفظ شات المذيع بأمان مع منع الطلبات المكررة ──
+  const messageSender = useMemo(() => createCallMessageSender<StreamChatMessage>(async (message: string) => {
+    // The returned row acknowledges delivery even without a Realtime echo.
+    const { data, error } = await supabase.from('stream_chat').insert([{
+      stream_id: streamId, user_id: String(myUserId),
+      username: myUsername || 'المذيع', message,
+    }])
+      .select('id, stream_id, user_id, username, message, created_at')
+      .single();
+    return {
+      data,
+      error: error ?? (!data?.id ? new Error('Missing persisted broadcaster chat ID') : null),
+    };
+  }), [streamId, myUserId, myUsername]);
+
+  const handleSendMessage = useCallback(async (text: string): Promise<boolean> => {
+    if (!text.trim() || messageSender.isSending()) return false;
     const optimisticId = `opt-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 
     setChatMessages(prev => [
       ...prev.slice(-(MESSAGES_LIMIT - 1)),
-      { id: optimisticId, user: myUsername || 'المذيع', userId: myUserId, text, color: '#ff2a74', isOptimistic: true },
+      { id: optimisticId, user: myUsername || 'المذيع', userId: myUserId, text: text.trim(), color: '#ff2a74', isOptimistic: true },
     ]);
 
-    const { error } = await supabase.from('stream_chat').insert([{
-      stream_id: streamId, user_id: String(myUserId), username: myUsername || 'المذيع', message: text,
-    }]);
-
-    if (error) {
-      setChatMessages(prev => prev.filter(m => m.id !== optimisticId));
-      console.error('فشل إرسال الرسالة:', error.message);
+    const result = await messageSender.send(text);
+    if (result.status !== 'sent' || !result.data?.id) {
+      setChatMessages(prev => prev.filter(message => message.id !== optimisticId));
+      return false;
     }
-  }, [streamId, myUserId, myUsername]);
+    // Reconcile the exact pending bubble by ID; an identical new draft or
+    // delayed history event cannot steal another message's acknowledgement.
+    const saved = result.data;
+    setChatMessages(prev => acknowledgeStreamChatMessage(prev, optimisticId, {
+      id: saved.id, user: saved.username, userId: saved.user_id,
+      text: saved.message, color: '#ff2a74', created_at: saved.created_at,
+      isOptimistic: false,
+    }, MESSAGES_LIMIT));
+    return true;
+  }, [messageSender, myUserId, myUsername]);
 
   const handleBanUser = useCallback(async (targetUserId: string, targetUsername: string) => {
     if (targetUserId === myUserId || bannedUsers.has(targetUserId)) {
@@ -649,6 +879,8 @@ export default function ActiveLiveRoom({
   }, [streamId, myUserId, bannedUsers]);
 
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+
+  const broadcastProblem = captureError || liveKitError;
 
   const roomContent = (
     <div style={styles.root}>
@@ -707,7 +939,7 @@ export default function ActiveLiveRoom({
             <div style={styles.streamerAvatar}>أنت</div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>{myUsername || title}</span>
-              <span style={{ fontSize: '0.65rem', color: '#4ade80', fontWeight: 700 }}>LIVE {formatTime(uptime)}</span>
+              <span style={{ fontSize: '0.65rem', color: mediaPublished ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{mediaPublished ? `LIVE ${formatTime(uptime)}` : 'جاري تجهيز البث'}</span>
             </div>
           </div>
           <div style={styles.statsRow}>
@@ -728,25 +960,57 @@ export default function ActiveLiveRoom({
         </div>
       </div>
 
+      {!mediaPublished && (
+        <div
+          onClick={event => event.stopPropagation()}
+          role={broadcastProblem ? 'alert' : 'status'}
+          style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(3, 7, 18, 0.92)', color: '#fff', padding: 22, textAlign: 'center' }}
+        >
+          <div style={{ maxWidth: 340, display: 'flex', alignItems: 'center', flexDirection: 'column', gap: 14 }}>
+            <strong>{broadcastProblem ? 'تعذر تجهيز البث للمشاهدين' : 'جاري تجهيز الاتصال بالبث...'}</strong>
+            {broadcastProblem && <p style={{ color: '#fecaca', fontSize: '0.87rem', margin: 0 }}>{broadcastProblem}</p>}
+            {broadcastProblem && <button type="button" onClick={retryMediaConnection} style={{ border: 0, borderRadius: 10, background: '#0e7490', color: '#fff', padding: '12px 18px', fontWeight: 700 }}>إعادة الاتصال</button>}
+            <button type="button" onClick={() => setShowEndModal(true)} style={{ border: '1px solid rgba(255,255,255,.3)', borderRadius: 10, background: 'rgba(255,255,255,.12)', color: '#fff', padding: '10px 16px' }}>إنهاء البث</button>
+          </div>
+        </div>
+      )}
+
       {showEndModal && (
         <EndStreamModal
-          onConfirm={() => { setShowEndModal(false); endStreamSafely(); }}
-          onCancel={() => setShowEndModal(false)}
+          onConfirm={() => { void endStreamSafely(); }}
+          onCancel={() => { if (!endingStream) { setEndError(null); setShowEndModal(false); } }}
+          pending={endingStream}
+          error={endError}
         />
       )}
     </div>
   );
 
   // إذا تم استلام مفتاح LiveKit، نقوم بتغليف الواجهة به للاتصال بالخادم
-  if (liveKitToken) {
+  if (liveKitToken && !broadcastProblem) {
     return (
-      <LiveKitRoom token={liveKitToken} serverUrl={import.meta.env.VITE_LIVEKIT_URL} connect={true}>
-        <StreamPublisher stream={streamRef.current} />
+      <LiveKitRoom
+        key={roomAttemptId}
+        token={liveKitToken}
+        serverUrl={import.meta.env.VITE_LIVEKIT_URL}
+        connect={true}
+        video={false}
+        audio={false}
+        onError={(error) => handleMediaFailure(roomAttemptId, error)}
+        onDisconnected={() => {
+          handleMediaFailure(roomAttemptId, new Error('Broadcaster disconnected from LiveKit'));
+        }}
+      >
+        <StreamPublisher
+          stream={streamRef.current}
+          onPublished={onPublishedForAttempt}
+          onPublishError={onPublishErrorForAttempt}
+        />
         {roomContent}
       </LiveKitRoom>
     );
   }
 
-  // في حالة انتظار التوكن، نعرض الواجهة محلياً فقط مؤقتاً
+  // Remain in the safe local preview with a retry/exit overlay if token fails.
   return roomContent;
 };

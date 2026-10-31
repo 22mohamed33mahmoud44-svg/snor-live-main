@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from './supabase';
+import { saveOwnProfile } from './utils/saveOwnProfile';
 // Assuming a translation hook or prop exists, e.g. from a context
 // For this example, we'll imagine a `t` object with strings is available.
 
@@ -42,8 +43,16 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
 
       // 1. رفع الصورة
       if (avatar) {
-        const fileExt = avatar.name.split('.').pop();
-        const fileName = `${userId}.${fileExt}`;
+        const fileTypes: Record<string, string> = {
+          'image/jpeg': 'jpg', 'image/png': 'png',
+          'image/webp': 'webp', 'image/gif': 'gif',
+        };
+        const fileExt = fileTypes[avatar.type];
+        if (!fileExt || avatar.size > 5 * 1024 * 1024) {
+          throw new Error('اختر صورة مدعومة بحجم لا يتجاوز 5 ميجابايت');
+        }
+        // Storage INSERT policy requires a user-id folder.
+        const fileName = `${userId}/avatar-${Date.now()}.${fileExt}`;
         const { error: uploadError } = await supabase.storage
           .from('avatars')
           .upload(fileName, avatar, { upsert: true });
@@ -55,16 +64,13 @@ export default function CompleteProfile({ userId, onComplete }: CompleteProfileP
       }
 
       // 2. الحفظ في قاعدة البيانات باستخدام upsert لتجنب تعارض البيانات
-      const { error } = await supabase.from('profiles').upsert({
-        id: userId,
-        username: username,
-        full_name: username, // إضافة الاسم الكامل بناءً على تقرير الأداء
-        gender: gender,
-        birthdate: birthdate,
-        avatar_url: avatar_url,
+      await saveOwnProfile(userId, {
+        username,
+        full_name: username,
+        gender,
+        birthdate,
+        avatar_url,
       });
-
-      if (error) throw error; // رمي الخطأ للـ catch
 
       // 3. النجاح التام
       onComplete();

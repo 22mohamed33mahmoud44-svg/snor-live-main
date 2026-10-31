@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../supabase';
+import { saveOwnProfile } from '../utils/saveOwnProfile';
+import { requiresOnboarding } from '../utils/profileGate';
+import { isAdultBirthdate } from '../utils/ageEligibility';
+import { onboardingProfileChanges } from '../utils/profileDefaults';
 
 export interface OnboardingData {
   birthdate: string;
@@ -42,7 +46,7 @@ export function useAuth() {
         return;
       }
 
-      if (!data) setShowOnboarding(true);
+      if (requiresOnboarding(data)) setShowOnboarding(true);
     } catch (error) {
       if (requestId !== profileCheckRequestRef.current) return;
       console.error('Profile check failed:', error);
@@ -53,6 +57,11 @@ export function useAuth() {
   }, []);
 
   const handleOnboardingComplete = async (data: OnboardingData, userId: string) => {
+    if (!isAdultBirthdate(data.birthdate) || !data.gender || !data.lookingFor) {
+      setProfileError('تأكد من صحة تاريخ الميلاد وأن عمرك 18 سنة أو أكثر، وأكمل باقي البيانات.');
+      return;
+    }
+
     let avatarUrl: string | null = null;
 
     if (data.profileImage) {
@@ -61,11 +70,16 @@ export function useAuth() {
         if (!res.ok) throw new Error(`Image fetch failed: ${res.status}`);
 
         const blob = await res.blob();
-        if (!blob.type.startsWith('image/')) throw new Error('Invalid image type');
+        const imageExtensions: Record<string, string> = {
+          'image/jpeg': 'jpg', 'image/png': 'png',
+          'image/webp': 'webp', 'image/gif': 'gif',
+        };
+        const extension = imageExtensions[blob.type];
+        if (!extension) throw new Error('Avatar file type is not supported');
         if (blob.size > 5 * 1024 * 1024) throw new Error('Image is larger than 5MB');
 
         // Storage RLS requires the first path segment to equal auth.uid().
-        const fileName = `${userId}/avatar-${Date.now()}.jpg`;
+        const fileName = `${userId}/avatar-${Date.now()}.${extension}`;
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('avatars')
           .upload(fileName, blob, { contentType: blob.type, upsert: true });
@@ -82,19 +96,7 @@ export function useAuth() {
     }
 
     try {
-      const { error } = await supabase.from('profiles').upsert({
-        id: userId,
-        gender: data.gender,
-        birthdate: data.birthdate,
-        looking_for: data.lookingFor,
-        avatar_url: avatarUrl,
-      });
-
-      if (error) {
-        console.error('Profile save failed:', error);
-        setProfileError('تعذر حفظ بيانات ملفك الشخصي. حاول مرة أخرى.');
-        return;
-      }
+      await saveOwnProfile(userId, onboardingProfileChanges(data, avatarUrl));
 
       setProfileError(null);
       setShowOnboarding(false);

@@ -1,23 +1,31 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { supabase } from './supabase';
-import { LiveKitRoom, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
+import { endMatchOnServer } from './utils/endMatchOnServer';
+import { createCallMessageSender } from './utils/callMessageSender';
+import { createMatchEndStatusPoller } from './utils/matchEndStatusPoller';
+import { createCallNavigationGuard } from './utils/callNavigationGuard';
+import { createIdempotentCallChatWriter } from './utils/idempotentCallChatWriter';
+import { createSessionCallChatAttemptStore } from './utils/sessionCallChatAttemptStore';
+import { mergeStreamChatHistory } from './utils/mergeStreamChatHistory';
+import { beginTimedCallTokenRequest } from './utils/timedCallTokenRequest';
+import { LiveKitRoom, RoomAudioRenderer, StartAudio, TrackToggle, useLocalParticipant, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
+
+type CallChatMessage = { id: string; sender_id: string; message: string; created_at?: string | null };
 
 type Props = {
   userId: string;
   matchId: string;
+  callType?: 'audio' | 'video';
   onEnd: () => void;
   onNext: () => void;
 };
 
+const CALL_CHAT_HISTORY_LIMIT = 30;
 const SFX_CONNECTING = 'https://assets.mixkit.co/active_storage/sfx/2568/2568-84.wav';
 const SFX_END = 'https://assets.mixkit.co/active_storage/sfx/2564/2564-84.wav';
 const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 type ErrorType = 'camera_denied' | 'camera_not_found' | 'connection_timeout' | 'connection_failed' | null;
-type SignalMessage = {
-  sender: string;
-  type: string;
-};
 const classifyLiveKitError = (error: unknown): Exclude<ErrorType, null> => {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? '').toLowerCase();
   const name = error instanceof Error ? error.name.toLowerCase() : '';
@@ -36,38 +44,82 @@ const NextIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="non
 const EndIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="2" x2="22" y1="2" y2="22"/></svg>;
 const SendIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>;
 
-export default function VideoCall({ userId, matchId, onEnd, onNext }: Props) {
+export default function VideoCall({ userId, matchId, onEnd, onNext, callType = 'video' }: Props) {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<ErrorType>(null);
-  const [muted, setMuted] = useState(false);
-  const [camOff, setCamOff] = useState(false);
   const [tokenLoading, setTokenLoading] = useState(true);
+  const [roomConnected, setRoomConnected] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  const leavingRef = useRef(false);
+  const navigationGuard = useMemo(() => createCallNavigationGuard(), [matchId]);
+  useEffect(() => () => navigationGuard.dispose(), [navigationGuard]);
+  // Ignore room callbacks from an old LiveKitRoom during retry teardown.
+  const roomAttemptId = `${matchId}-${retryKey}`;
+  const activeRoomAttemptRef = useRef(roomAttemptId);
+  activeRoomAttemptRef.current = roomAttemptId;
 
+  // The Edge Function may never resolve. Bound token setup and ignore any
+  // response from a previous attempt after retry, unmount or match change.
   useEffect(() => {
-    let isMounted = true;
     setToken(null);
     setError(null);
+    setRoomConnected(false);
     setTokenLoading(true);
-    const fetchToken = async () => {
-      try {
-        const { data, error: reqError } = await supabase.functions.invoke('livekit-token', { body: { room: matchId, username: userId, isStreamer: true } });
-        if (reqError || !data?.token) throw reqError ?? new Error('LiveKit token was not returned');
-        if (isMounted) setToken(data.token);
-      } catch (err) {
-        console.error('LiveKit token request failed:', err);
-        if (isMounted) setError('connection_failed');
-      } finally {
-        if (isMounted) setTokenLoading(false);
-      }
-    };
-    void fetchToken();
-    return () => { isMounted = false; };
+    return beginTimedCallTokenRequest(
+      () => supabase.functions.invoke('livekit-token', {
+        body: { room: matchId, username: userId, isStreamer: true },
+      }),
+      20_000,
+      result => {
+        setTokenLoading(false);
+        if (result.status === 'ready') setToken(result.token);
+        else setError(result.status === 'timeout' ? 'connection_timeout' : 'connection_failed');
+      },
+    );
   }, [matchId, userId, retryKey]);
 
+  // Getting a token is not proof that LiveKit has actually connected.
+  // If the WebSocket/room connection stalls without an error event, display
+  // the same retry and safe-exit actions as other connection failures.
+  useEffect(() => {
+    if (!token || roomConnected || error) return;
+    const connectionTimeout = window.setTimeout(() => {
+      setError(previous => previous ?? 'connection_timeout');
+    }, 30_000);
+    return () => window.clearTimeout(connectionTimeout);
+  }, [token, roomConnected, error]);
+
+  const leaveFailedCall = async () => {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    setLeaving(true);
+    setLeaveError(null);
+    try {
+      if (await endMatchOnServer(matchId)) {
+        // A stale hangup acknowledgement must never navigate a newer call.
+        if (navigationGuard.claim()) onEnd();
+      } else if (navigationGuard.isActive()) {
+        setLeaveError('تعذر تأكيد إنهاء المكالمة على الخادم. تحقق من الإنترنت وحاول مجدداً.');
+      }
+    } catch (error) {
+      console.error('Failed to leave disconnected call:', error);
+      if (navigationGuard.isActive()) setLeaveError('تعذر إنهاء المكالمة بسبب مشكلة اتصال. حاول مرة أخرى.');
+    } finally {
+      leavingRef.current = false;
+      if (navigationGuard.isActive()) setLeaving(false);
+    }
+  };
+
   const retryConnection = () => {
+    if (leavingRef.current) return;
+    setLeaveError(null);
     setError(null);
     setToken(null);
+    setRoomConnected(false);
+    setTokenLoading(true);
+    activeRoomAttemptRef.current = `${matchId}-${retryKey + 1}`;
     setRetryKey(key => key + 1);
   };
 
@@ -79,19 +131,120 @@ export default function VideoCall({ userId, matchId, onEnd, onNext }: Props) {
       connection_failed: { icon: <VideoIcon />, title: 'تعذر الاتصال بالفيديو', desc: 'حدثت مشكلة أثناء الاتصال بخدمة الفيديو. تحقق من الإنترنت وحاول مرة أخرى.', showRetry: true, showEnd: true },
     };
     const e = errorMessages[error];
-    return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box">{e.icon}</div><h2>{e.title}</h2><p>{e.desc}</p><div style={{ display: 'flex', gap: 14 }}>{e.showRetry && <button type="button" className="vc-err-btn primary" onClick={retryConnection}>إعادة الاتصال</button>}{e.showEnd && <button type="button" className="vc-err-btn secondary" onClick={onEnd}>مغادرة الغرفة</button>}</div></div>;
+    return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box">{e.icon}</div><h2>{e.title}</h2><p>{e.desc}</p><div style={{ display: 'flex', gap: 14 }}>{e.showRetry && <button type="button" className="vc-err-btn primary" onClick={retryConnection} disabled={leaving}>إعادة الاتصال</button>}{e.showEnd && <button type="button" className="vc-err-btn secondary" disabled={leaving} onClick={() => { void leaveFailedCall(); }}>{leaving ? 'جاري إنهاء المكالمة...' : 'مغادرة الغرفة'}</button>}</div>{leaveError && <p role="alert">{leaveError}</p>}</div>;
   }
 
   if (tokenLoading || !token) return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box"><VideoIcon /></div><h2>جاري تجهيز الاتصال</h2><p>نقوم بتجهيز الاتصال الآمن بالفيديو، لحظات...</p></div>;
 
-  return <LiveKitRoom token={token} serverUrl={import.meta.env.VITE_LIVEKIT_URL} connect={true} video={!camOff} audio={!muted} onError={(liveKitError) => setError(classifyLiveKitError(liveKitError))}><CallUI userId={userId} matchId={matchId} onEnd={onEnd} onNext={onNext} muted={muted} setMuted={setMuted} camOff={camOff} setCamOff={setCamOff} /></LiveKitRoom>;
+  return (
+    <LiveKitRoom
+      key={roomAttemptId}
+      token={token}
+      serverUrl={import.meta.env.VITE_LIVEKIT_URL}
+      connect={true}
+      // These props configure initial publishing; live toggles use TrackToggle.
+      video={callType === 'video'}
+      audio={true}
+      onConnected={() => {
+        if (activeRoomAttemptRef.current === roomAttemptId) setRoomConnected(true);
+      }}
+      onDisconnected={() => {
+        if (activeRoomAttemptRef.current !== roomAttemptId) return;
+        setRoomConnected(false);
+        setError(previous => previous ?? 'connection_failed');
+      }}
+      onError={(liveKitError) => {
+        if (activeRoomAttemptRef.current === roomAttemptId) setError(classifyLiveKitError(liveKitError));
+      }}
+    >
+      {/* Remote audio must be rendered for both video and audio-only calls.
+          This must NOT be muted when the user mutes their own microphone. */}
+      <RoomAudioRenderer />
+      {/* Browsers can block remote audio until the user taps a control.
+          LiveKit hides this button automatically once playback is permitted. */}
+      <StartAudio
+        label="اضغط لتشغيل صوت المكالمة"
+        style={{
+          position: 'fixed',
+          bottom: 112,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1002,
+          padding: '12px 18px',
+          border: '1px solid rgba(255,255,255,0.24)',
+          borderRadius: 12,
+          background: '#0e7490',
+          color: '#fff',
+          fontFamily: 'Cairo, sans-serif',
+          fontWeight: 700,
+          cursor: 'pointer',
+        }}
+      />
+      <CallUI
+        userId={userId}
+        matchId={matchId}
+        callType={callType}
+        onEnd={onEnd}
+        onNext={onNext}
+      />
+    </LiveKitRoom>
+  );
 }
 
-function CallUI({ userId, matchId, onEnd, onNext, muted, setMuted, camOff, setCamOff }: Omit<Props, 'remoteUserId'> & { muted: boolean, setMuted: React.Dispatch<React.SetStateAction<boolean>>, camOff: boolean, setCamOff: React.Dispatch<React.SetStateAction<boolean>> }) {
+function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
+  // Every mounted call UI owns an independent navigation guard. Delayed
+  // server responses from a disposed room are ignored.
+  const navigationGuard = useMemo(() => createCallNavigationGuard(), [matchId]);
+  useEffect(() => () => navigationGuard.dispose(), [navigationGuard]);
   const [mirrored, setMirrored] = useState(true);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [endError, setEndError] = useState<string | null>(null);
+  // Read the real published media state, never a separate UI-only boolean.
+  const { isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
+  const camOff = !isCameraEnabled;
   const [duration, setDuration] = useState(0);
-  const [messages, setMessages] = useState<{ id: string; sender_id: string; message: string }[]>([]);
+  const [messages, setMessages] = useState<CallChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [chatSendError, setChatSendError] = useState<string | null>(null);
+  const messageSender = useMemo(() => {
+    // sessionStorage is tab-scoped and contains only the pending UUID and
+    // draft fingerprint, never message content. Some browsers block storage.
+    let sessionStorageForCall: Storage | null = null;
+    try { sessionStorageForCall = window.sessionStorage; } catch { /* private/blocked storage */ }
+    const attemptStore = createSessionCallChatAttemptStore(
+      sessionStorageForCall,
+      `snor:call-chat-pending:${matchId}:${userId}`,
+    );
+    const writer = createIdempotentCallChatWriter<CallChatMessage>(
+      () => crypto.randomUUID(),
+      async (id, message, signal) => {
+        // Primary key stays constant after an ambiguous network failure.
+        // DO NOTHING on conflict prevents a second DB row on retry.
+        const { data, error } = await supabase.from('messages').upsert({
+          id, match_id: matchId, sender_id: userId, message,
+        }, { onConflict: 'id', ignoreDuplicates: true })
+          .select('id, sender_id, message, created_at')
+          .abortSignal(signal)
+          .maybeSingle();
+        return { data, error };
+      },
+      async (id, signal) => {
+        // If the first write committed but confirmation was lost, this
+        // participant-scoped read can safely acknowledge the existing row.
+        const { data, error } = await supabase.from('messages')
+          .select('id, sender_id, message, created_at')
+          .eq('id', id)
+          .eq('match_id', matchId)
+          .eq('sender_id', userId)
+          .abortSignal(signal)
+          .maybeSingle();
+        return { data, error };
+      },
+      attemptStore,
+    );
+    return createCallMessageSender<CallChatMessage>(message => writer.persist(message));
+  }, [matchId, userId]);
   const [showChat, setShowChat] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [newMsg, setNewMsg] = useState(false);
@@ -115,24 +268,151 @@ function CallUI({ userId, matchId, onEnd, onNext, muted, setMuted, camOff, setCa
   useEffect(() => { if (!isConnected) return; const t = setInterval(() => setDuration(d => d + 1), 1000); return () => clearInterval(t); }, [isConnected]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => { resetControlsTimer(); return () => { if (controlsTimer.current) clearTimeout(controlsTimer.current); }; }, [resetControlsTimer]);
+  // Match status, not a signal inserted after ending, is the authoritative
+  // source of truth. Supabase disallows signals inserts after status='ended',
+  // and its cleanup trigger removes old signals on that transition.
   useEffect(() => {
-    const channelName = `vc-chat-sig-${matchId}`;
-    const channel = supabase.channel(channelName)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` }, payload => { const incoming = payload.new as { id: string; sender_id: string; message: string }; setMessages(prev => (prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming])); if (incoming.sender_id !== userId) setNewMsg(true); })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `match_id=eq.${matchId}` }, payload => { const msg = payload.new as SignalMessage; if (msg.sender !== userId && msg.type === 'end') { if (sfxRef.current) { sfxRef.current.pause(); sfxRef.current = null; } const audio = new Audio(SFX_END); audio.volume = 0.4; audio.play().catch(() => {}); sfxRef.current = audio; onEndRef.current(); } })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [matchId, userId]);
-  const triggerEndMatch = async (action: 'next' | 'end') => { if (endingRef.current) return; endingRef.current = true; playSFX(SFX_END); try { await supabase.from('matches').update({ status: 'ended' }).eq('id', matchId); await supabase.from('signals').insert({ match_id: matchId, type: 'end', data: {}, sender: userId }); } finally { action === 'next' ? onNext() : onEnd(); } };
-  const sendMessage = async () => { const text = input.trim(); if (!text) return; setInput(''); const { error } = await supabase.from('messages').insert({ match_id: matchId, sender_id: userId, message: text }); if (error) console.error('Message send failed:', error); };
+    let disposed = false;
+    const handleEnded = () => {
+      if (disposed || endingRef.current || !navigationGuard.claim()) return;
+      endingRef.current = true;
+      playSFX(SFX_END);
+      onEndRef.current();
+    };
+
+    // Check match status at most once per polling period. The poller aborts
+    // an unresponsive PostgREST request after 12 seconds, so the next timer
+    // tick can recover without accumulating stale requests.
+    const endStatusPoller = createMatchEndStatusPoller(
+      async signal => {
+        const { data, error } = await supabase
+          .from('matches')
+          .select('status')
+          .eq('id', matchId)
+          .abortSignal(signal)
+          .maybeSingle();
+        return { data, error };
+      },
+      handleEnded,
+    );
+    const checkEnded = () => endStatusPoller.check();
+
+    // Only query this match after Realtime has subscribed. Fetching before
+    // subscribing leaves a gap in which a message could be persisted but
+    // neither included in the snapshot nor delivered through Realtime.
+    const fetchRecentMessages = async () => {
+      try {
+        const { data, error } = await supabase.from('messages')
+          .select('id, sender_id, message, created_at')
+          .eq('match_id', matchId)
+          .order('created_at', { ascending: false })
+          .limit(CALL_CHAT_HISTORY_LIMIT);
+        if (disposed) return;
+        if (error) {
+          console.error('Unable to load call chat history:', error);
+          return;
+        }
+        if (data) {
+          setMessages(current => mergeStreamChatHistory<CallChatMessage>(
+            data.slice().reverse(), current, CALL_CHAT_HISTORY_LIMIT,
+          ));
+        }
+      } catch (error) {
+        if (!disposed) console.error('Call chat history load failed:', error);
+      }
+    };
+
+    const channel = supabase.channel(`vc-chat-match-${matchId}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'messages',
+        filter: `match_id=eq.${matchId}`,
+      }, payload => {
+        if (disposed) return;
+        const incoming = payload.new as CallChatMessage;
+        setMessages(prev => mergeStreamChatHistory<CallChatMessage>([incoming], prev, CALL_CHAT_HISTORY_LIMIT));
+        if (incoming.sender_id !== userId) setNewMsg(true);
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'matches',
+        filter: `id=eq.${matchId}`,
+      }, payload => {
+        const match = payload.new as { status?: string };
+        if (match.status === 'ended') handleEnded();
+      })
+      .subscribe(status => {
+        if (status === 'SUBSCRIBED' && !disposed) void fetchRecentMessages();
+      });
+
+    void checkEnded();
+    const poll = setInterval(() => { void checkEnded(); }, 3000);
+    return () => {
+      disposed = true;
+      endStatusPoller.dispose();
+      clearInterval(poll);
+      void supabase.removeChannel(channel);
+    };
+  }, [matchId, userId, playSFX, navigationGuard]);
+
+  const triggerEndMatch = async (action: 'next' | 'end') => {
+    if (endingRef.current) return;
+    endingRef.current = true;
+    setEndError(null);
+    let confirmedEnded = false;
+    try {
+      // Do not write to signals after ending: RLS rejects that insert.
+      confirmedEnded = await endMatchOnServer(matchId);
+      if (!confirmedEnded) {
+        if (navigationGuard.isActive()) setEndError('تعذر تأكيد إنهاء المكالمة على الخادم. تحقق من الإنترنت وحاول مرة أخرى.');
+        return;
+      }
+      // The caller may already have moved to another match during the RPC.
+      if (!navigationGuard.claim()) return;
+      playSFX(SFX_END);
+      if (action === 'next') onNext();
+      else onEnd();
+    } catch (error) {
+      console.error('Call hangup failed:', error);
+      if (navigationGuard.isActive()) setEndError('تعذر إنهاء المكالمة. حاول مرة أخرى.');
+    } finally {
+      // A confirmed end must not allow a second tap before navigation.
+      if (!confirmedEnded && navigationGuard.isActive()) endingRef.current = false;
+    }
+  };
+  const sendMessage = async () => {
+    const draft = input;
+    if (!draft.trim() || messageSender.isSending() || !navigationGuard.isActive()) return;
+    setSendingMessage(true);
+    setChatSendError(null);
+    try {
+      const result = await messageSender.send(draft);
+      // The user may have left or advanced to another match during the
+      // bounded request. Never publish its UI result into a disposed call.
+      if (!navigationGuard.isActive()) return;
+      if (result.status === 'sent' && result.data?.id) {
+        // A successful insert should render without requiring a Realtime
+        // echo. Merge by DB ID so history/replayed INSERTs cannot duplicate it.
+        setMessages(current => mergeStreamChatHistory<CallChatMessage>(
+          [result.data!], current, CALL_CHAT_HISTORY_LIMIT,
+        ));
+        // Do not clear characters the user typed during the pending request.
+        setInput(current => current === draft ? '' : current);
+      } else if (result.status === 'failed') {
+        setChatSendError('تعذر إرسال الرسالة. الرسالة محفوظة هنا، حاول مرة أخرى.');
+      }
+    } finally {
+      if (navigationGuard.isActive()) setSendingMessage(false);
+    }
+  };
   const openChat = () => { setShowChat(true); setNewMsg(false); setShowControls(true); };
   const closeChat = () => { setShowChat(false); resetControlsTimer(); };
-  return <div className="vc-app-container" onClick={resetControlsTimer}><style>{STYLES}</style>{remoteTracks.length > 0 && remoteTracks[0].publication.track ? <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" /> : <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><div className="vc-radar-pulse pulse-3" /><span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span></div>}<div className="vc-shading-top" /><div className="vc-shading-bottom" /><div className="vc-pip-container">{localTracks.length > 0 && localTracks[0].publication.track ? <VideoTrack trackRef={localTracks[0]} className="vc-pip-core-video" style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} /> : null}{camOff && <div className="vc-pip-camera-blind"><VideoOffIcon /></div>}</div><div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}><div className="vc-status-badge"><span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} /><span className="vc-live-timer">{isConnected ? fmt(duration) : 'إشارة معلقة'}</span></div></div>{showChat && <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}><div className="vc-chat-top-header"><span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span><button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button></div><div className="vc-chat-scroller">{messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}{messages.map((msg, i) => <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}><div className="vc-bubble-text">{msg.message}</div></div>)}<div ref={messagesEndRef} /></div><div className="vc-chat-footer-composer"><input className="vc-chat-native-input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && sendMessage()} placeholder="اكتب رسالة سريعة للطرف الآخر..."/><button type="button" className="vc-chat-submit-btn" onClick={sendMessage}><SendIcon /></button></div></div>}<div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}><button type="button" className={`vc-action-pill ${muted ? 'disabled' : ''}`} onClick={() => setMuted(!muted)}><div className="vc-pill-icon-holder">{muted ? <MicOffIcon /> : <MicIcon />}</div><span className="vc-pill-caption">{muted ? 'تشغيل' : 'كتم'}</span></button><button type="button" className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onClick={() => setCamOff(!camOff)}><div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div><span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span></button><button type="button" className="vc-action-pill" onClick={() => setMirrored(m => !m)}><div className="vc-pill-icon-holder"><FlipIcon /></div><span className="vc-pill-caption">عكس</span></button><button type="button" className={`vc-action-pill ${showChat ? 'active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}><div className="vc-pill-icon-holder"><ChatIcon /></div><span className="vc-pill-caption">الشات</span>{newMsg && !showChat && <span className="vc-unread-badge-dot" />}</button><button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}><div className="vc-pill-icon-holder"><NextIcon /></div><span className="vc-pill-caption">التالي</span></button><button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}><div className="vc-pill-icon-holder"><EndIcon /></div><span className="vc-pill-caption">خروج</span></button></div></div>;
+  return <div className="vc-app-container" onClick={resetControlsTimer}><style>{STYLES}</style>{callType === 'audio' ? <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><span className="vc-connecting-headline">مكالمة صوتية {isConnected ? 'متصلة' : 'جاري الاتصال...'}</span></div> : remoteTracks.length > 0 && remoteTracks[0].publication.track ? <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" /> : <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><div className="vc-radar-pulse pulse-3" /><span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span></div>}<div className="vc-shading-top" /><div className="vc-shading-bottom" /><div className="vc-pip-container">{localTracks.length > 0 && localTracks[0].publication.track ? <VideoTrack trackRef={localTracks[0]} className="vc-pip-core-video" style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} /> : null}{camOff && <div className="vc-pip-camera-blind"><VideoOffIcon /></div>}</div><div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}><div className="vc-status-badge"><span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} /><span className="vc-live-timer">{isConnected ? fmt(duration) : 'إشارة معلقة'}</span></div></div>{showChat && <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}><div className="vc-chat-top-header"><span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span><button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button></div><div className="vc-chat-scroller">{messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}{messages.map((msg, i) => <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}><div className="vc-bubble-text">{msg.message}</div></div>)}<div ref={messagesEndRef} /></div><div className="vc-chat-footer-composer"><input className="vc-chat-native-input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && !sendingMessage) void sendMessage(); }} placeholder="اكتب رسالة سريعة للطرف الآخر..."/><button type="button" className="vc-chat-submit-btn" onClick={() => { void sendMessage(); }} disabled={sendingMessage || !input.trim()} aria-label="إرسال رسالة"><SendIcon /></button></div>{chatSendError && <p role="alert" className="vc-chat-send-error">{chatSendError}</p>}</div>}<div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}><TrackToggle source={Track.Source.Microphone} showIcon={false} disabled={!isConnected} className={`vc-action-pill ${!isMicrophoneEnabled ? 'disabled' : ''}`} onChange={() => setMediaError(null)} onDeviceError={() => setMediaError('تعذر تغيير حالة الميكروفون. تأكد من أذونات الميكروفون وحاول مرة أخرى.')}><div className="vc-pill-icon-holder">{isMicrophoneEnabled ? <MicIcon /> : <MicOffIcon />}</div><span className="vc-pill-caption">{isMicrophoneEnabled ? 'كتم' : 'تشغيل'}</span></TrackToggle>{callType !== 'audio' && <TrackToggle source={Track.Source.Camera} showIcon={false} disabled={!isConnected} className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onChange={() => setMediaError(null)} onDeviceError={() => setMediaError('تعذر تغيير حالة الكاميرا. تأكد من أذونات الكاميرا وحاول مرة أخرى.')}><div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div><span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span></TrackToggle>}<button type="button" className="vc-action-pill" onClick={() => setMirrored(m => !m)}><div className="vc-pill-icon-holder"><FlipIcon /></div><span className="vc-pill-caption">عكس</span></button><button type="button" className={`vc-action-pill ${showChat ? 'active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}><div className="vc-pill-icon-holder"><ChatIcon /></div><span className="vc-pill-caption">الشات</span>{newMsg && !showChat && <span className="vc-unread-badge-dot" />}</button><button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}><div className="vc-pill-icon-holder"><NextIcon /></div><span className="vc-pill-caption">التالي</span></button><button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}><div className="vc-pill-icon-holder"><EndIcon /></div><span className="vc-pill-caption">خروج</span></button></div>{mediaError && <p className="vc-media-error" role="alert">{mediaError}</p>}{endError && <p className="vc-media-error" role="alert">{endError}</p>}</div>;
 }
 
 const STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
   .vc-app-container { position: fixed; inset: 0; background: #040408; z-index: 1000; overflow: hidden; font-family: 'Cairo', sans-serif; user-select: none; }
+  .vc-media-error { position: absolute; z-index: 15; bottom: 112px; left: 16px; right: 16px; color: #fecaca; background: rgba(127,29,29,0.85); text-align: center; border-radius: 10px; padding: 10px; font-size: .8rem; }
+  .vc-chat-send-error { color: #fecaca; background: rgba(127,29,29,0.35); padding: 8px 12px; margin: 0; font-size: .8rem; text-align: center; }
   .vc-remote-stream-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
   .vc-shading-top { position: absolute; top: 0; left: 0; right: 0; height: 140px; background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%); pointer-events: none; z-index: 2; }
   .vc-shading-bottom { position: absolute; bottom: 0; left: 0; right: 0; height: 220px; background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%); pointer-events: none; z-index: 2; }
