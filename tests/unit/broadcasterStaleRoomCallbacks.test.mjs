@@ -10,8 +10,8 @@ test('broadcaster LiveKit rooms and publishers capture unique attempt IDs', () =
   assert.match(room, /activeRoomAttemptRef\.current = roomAttemptId/);
   assert.match(room, /key=\{roomAttemptId\}/);
   assert.match(room, /onError=\{\(error\) => handleMediaFailure\(roomAttemptId, error\)\}/);
-  assert.match(room, /onPublished=\{\(\) => handleMediaPublished\(roomAttemptId\)\}/);
-  assert.match(room, /onPublishError=\{\(error\) => handleMediaFailure\(roomAttemptId, error\)\}/);
+  assert.match(room, /onPublished=\{onPublishedForAttempt\}/);
+  assert.match(room, /onPublishError=\{onPublishErrorForAttempt\}/);
   assert.match(room, /handleMediaFailure\(roomAttemptId, new Error\('Broadcaster disconnected from LiveKit'\)\)/);
 });
 
@@ -51,4 +51,17 @@ test('late publish watchdog timeout cannot report a failure for a newer attempt'
   assert.match(watchdog, /activeRoomAttemptRef\.current !== roomAttemptId \|\| endingRef\.current/);
   assert.match(watchdog, /window\.clearTimeout\(watchdog\)/);
   assert.match(watchdog, /\[liveKitToken, mediaPublished, liveKitError, roomAttemptId\]/);
+});
+
+test('publisher callback identities stay stable across unrelated broadcaster renders', () => {
+  assert.match(room, /const onPublishedForAttempt = useCallback\(\(\) => \{/);
+  assert.match(room, /handleMediaPublished\(roomAttemptId\)/);
+  assert.match(room, /\}, \[handleMediaPublished, roomAttemptId\]\)/);
+  assert.match(room, /const onPublishErrorForAttempt = useCallback\(\(error: Error\) => \{/);
+  assert.match(room, /handleMediaFailure\(roomAttemptId, error\)/);
+  assert.match(room, /\}, \[handleMediaFailure, roomAttemptId\]\)/);
+  assert.match(room, /onPublished=\{onPublishedForAttempt\}/);
+  assert.match(room, /onPublishError=\{onPublishErrorForAttempt\}/);
+  assert.doesNotMatch(room, /onPublished=\{\(\) => handleMediaPublished\(/,
+    'inline published callback would unpublish/re-publish on uptime re-render');
 });
