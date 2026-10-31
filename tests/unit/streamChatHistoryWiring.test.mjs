@@ -23,7 +23,8 @@ test('viewer and broadcaster fetch newest history and merge with already arrived
 test('both history effects ignore responses after cleanup', () => {
   assert.match(viewer, /if \(data && isMounted\)/);
   assert.match(viewer, /isMounted = false/);
-  assert.match(broadcaster, /if \(!isMounted \|\| !data\) return/);
+  assert.match(broadcaster, /if \(!isMounted\) return/);
+  assert.match(broadcaster, /if \(!data\) return/);
   assert.match(broadcaster, /isMounted = false;\s*stopHeartbeat\(\)/);
 });
 
