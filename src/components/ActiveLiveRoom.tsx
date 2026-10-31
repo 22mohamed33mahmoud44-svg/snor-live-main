@@ -5,7 +5,7 @@ import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
 import { createCallMessageSender } from '../utils/callMessageSender';
 import { createCancelableMediaCapture } from '../utils/cancelableMediaCapture';
 import { addStreamLikeBatch, reconcileStreamLikeSnapshot } from '../utils/streamLikeCounter';
-import { mergeStreamChatHistory } from '../utils/mergeStreamChatHistory';
+import { mergeStreamChatHistory, acknowledgeStreamChatMessage } from '../utils/mergeStreamChatHistory';
 import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
 import { Track, ConnectionState } from 'livekit-client';
 
@@ -733,18 +733,15 @@ export default function ActiveLiveRoom({
 
     roomChannel
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stream_chat', filter: `stream_id=eq.${streamId}` }, (payload) => {
+        if (!isMounted) return;
         const newMsg = payload.new as StreamChatMessage;
-        setChatMessages(prev => {
-          const optimisticIdx = prev.findIndex(m => m.isOptimistic && m.userId === newMsg.user_id && m.text === newMsg.message);
-          const withoutOptimistic = optimisticIdx >= 0 ? prev.filter((_, i) => i !== optimisticIdx) : prev;
-          if (withoutOptimistic.some(m => m.id === newMsg.id)) return prev;
-
-          return [...withoutOptimistic.slice(-(MESSAGES_LIMIT - 1)), {
-            id: newMsg.id, user: newMsg.username, userId: newMsg.user_id, text: newMsg.message,
-            color: newMsg.user_id === myUserId ? '#ff2a74' : '#60a5fa',
-            created_at: newMsg.created_at, isOptimistic: false,
-          }];
-        });
+        // Our own inserts are acknowledged with their real DB IDs below.
+        // Avoid guessing which pending bubble matches a repeated text.
+        if (newMsg.user_id === myUserId) return;
+        setChatMessages(prev => mergeStreamChatHistory([{
+          id: newMsg.id, user: newMsg.username, userId: newMsg.user_id, text: newMsg.message,
+          color: '#60a5fa', created_at: newMsg.created_at, isOptimistic: false,
+        }], prev, MESSAGES_LIMIT));
       })
       .on('broadcast', { event: 'like' }, () => {
         if (isMounted) setLikesCount(prev => addStreamLikeBatch(prev, 1));
@@ -810,12 +807,18 @@ export default function ActiveLiveRoom({
   }, [banToast]);
 
   // ── حفظ شات المذيع بأمان مع منع الطلبات المكررة ──
-  const messageSender = useMemo(() => createCallMessageSender(async (message: string) => {
-    const { error } = await supabase.from('stream_chat').insert([{
+  const messageSender = useMemo(() => createCallMessageSender<StreamChatMessage>(async (message: string) => {
+    // The returned row acknowledges delivery even without a Realtime echo.
+    const { data, error } = await supabase.from('stream_chat').insert([{
       stream_id: streamId, user_id: String(myUserId),
       username: myUsername || 'المذيع', message,
-    }]);
-    return { error };
+    }])
+      .select('id, stream_id, user_id, username, message, created_at')
+      .single();
+    return {
+      data,
+      error: error ?? (!data?.id ? new Error('Missing persisted broadcaster chat ID') : null),
+    };
   }), [streamId, myUserId, myUsername]);
 
   const handleSendMessage = useCallback(async (text: string): Promise<boolean> => {
@@ -828,11 +831,18 @@ export default function ActiveLiveRoom({
     ]);
 
     const result = await messageSender.send(text);
-    if (result.status !== 'sent') {
+    if (result.status !== 'sent' || !result.data?.id) {
       setChatMessages(prev => prev.filter(message => message.id !== optimisticId));
       return false;
     }
-    // Realtime swaps the optimistic message with the persisted server ID.
+    // Reconcile the exact pending bubble by ID; an identical new draft or
+    // delayed history event cannot steal another message's acknowledgement.
+    const saved = result.data;
+    setChatMessages(prev => acknowledgeStreamChatMessage(prev, optimisticId, {
+      id: saved.id, user: saved.username, userId: saved.user_id,
+      text: saved.message, color: '#ff2a74', created_at: saved.created_at,
+      isOptimistic: false,
+    }, MESSAGES_LIMIT));
     return true;
   }, [messageSender, myUserId, myUsername]);
 
