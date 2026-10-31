@@ -41,6 +41,7 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
   const [tokenLoading, setTokenLoading] = useState(true);
   const [retryKey, setRetryKey] = useState(0);
   const [leaveError, setLeaveError] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
   const leavingRef = useRef(false);
 
   useEffect(() => {
@@ -67,15 +68,20 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
   const leaveFailedCall = async () => {
     if (leavingRef.current) return;
     leavingRef.current = true;
+    setLeaving(true);
     setLeaveError(null);
     try {
       if (await endMatchOnServer(matchId)) {
         onEnd();
       } else {
-        setLeaveError('تعذر إنهاء المكالمة في قاعدة البيانات. تحقق من الإنترنت وحاول مجدداً.');
+        setLeaveError('تعذر تأكيد إنهاء المكالمة على الخادم. تحقق من الإنترنت وحاول مجدداً.');
       }
+    } catch (error) {
+      console.error('Failed to leave disconnected call:', error);
+      setLeaveError('تعذر إنهاء المكالمة بسبب مشكلة اتصال. حاول مرة أخرى.');
     } finally {
       leavingRef.current = false;
+      setLeaving(false);
     }
   };
 
@@ -93,7 +99,7 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
       connection_failed: { icon: <VideoIcon />, title: 'تعذر الاتصال بالفيديو', desc: 'حدثت مشكلة أثناء الاتصال بخدمة الفيديو. تحقق من الإنترنت وحاول مرة أخرى.', showRetry: true, showEnd: true },
     };
     const e = errorMessages[error];
-    return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box">{e.icon}</div><h2>{e.title}</h2><p>{e.desc}</p><div style={{ display: 'flex', gap: 14 }}>{e.showRetry && <button type="button" className="vc-err-btn primary" onClick={retryConnection}>إعادة الاتصال</button>}{e.showEnd && <button type="button" className="vc-err-btn secondary" onClick={() => { void leaveFailedCall(); }}>مغادرة الغرفة</button>}</div>{leaveError && <p role="alert">{leaveError}</p>}</div>;
+    return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box">{e.icon}</div><h2>{e.title}</h2><p>{e.desc}</p><div style={{ display: 'flex', gap: 14 }}>{e.showRetry && <button type="button" className="vc-err-btn primary" onClick={retryConnection} disabled={leaving}>إعادة الاتصال</button>}{e.showEnd && <button type="button" className="vc-err-btn secondary" disabled={leaving} onClick={() => { void leaveFailedCall(); }}>{leaving ? 'جاري إنهاء المكالمة...' : 'مغادرة الغرفة'}</button>}</div>{leaveError && <p role="alert">{leaveError}</p>}</div>;
   }
 
   if (tokenLoading || !token) return <div className="vc-premium-error-pane"><style>{STYLES}</style><div className="vc-error-icon-box"><VideoIcon /></div><h2>جاري تجهيز الاتصال</h2><p>نقوم بتجهيز الاتصال الآمن بالفيديو، لحظات...</p></div>;
@@ -145,6 +151,7 @@ export default function VideoCall({ userId, matchId, onEnd, onNext, callType = '
 function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   const [mirrored, setMirrored] = useState(true);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [endError, setEndError] = useState<string | null>(null);
   // Read the real published media state, never a separate UI-only boolean.
   const { isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
   const camOff = !isCameraEnabled;
@@ -235,16 +242,25 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   const triggerEndMatch = async (action: 'next' | 'end') => {
     if (endingRef.current) return;
     endingRef.current = true;
-    // Do not write to signals after ending: RLS rejects that insert.
-    if (!(await endMatchOnServer(matchId))) {
-      endingRef.current = false;
-      window.alert('تعذر إنهاء المكالمة على الخادم. حاول مرة أخرى.');
-      return;
+    setEndError(null);
+    let confirmedEnded = false;
+    try {
+      // Do not write to signals after ending: RLS rejects that insert.
+      confirmedEnded = await endMatchOnServer(matchId);
+      if (!confirmedEnded) {
+        setEndError('تعذر تأكيد إنهاء المكالمة على الخادم. تحقق من الإنترنت وحاول مرة أخرى.');
+        return;
+      }
+      playSFX(SFX_END);
+      if (action === 'next') onNext();
+      else onEnd();
+    } catch (error) {
+      console.error('Call hangup failed:', error);
+      setEndError('تعذر إنهاء المكالمة. حاول مرة أخرى.');
+    } finally {
+      // A confirmed end must not allow a second tap before navigation.
+      if (!confirmedEnded) endingRef.current = false;
     }
-
-    playSFX(SFX_END);
-    if (action === 'next') onNext();
-    else onEnd();
   };
   const sendMessage = async () => {
     const draft = input;
@@ -265,7 +281,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   };
   const openChat = () => { setShowChat(true); setNewMsg(false); setShowControls(true); };
   const closeChat = () => { setShowChat(false); resetControlsTimer(); };
-  return <div className="vc-app-container" onClick={resetControlsTimer}><style>{STYLES}</style>{callType === 'audio' ? <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><span className="vc-connecting-headline">مكالمة صوتية {isConnected ? 'متصلة' : 'جاري الاتصال...'}</span></div> : remoteTracks.length > 0 && remoteTracks[0].publication.track ? <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" /> : <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><div className="vc-radar-pulse pulse-3" /><span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span></div>}<div className="vc-shading-top" /><div className="vc-shading-bottom" /><div className="vc-pip-container">{localTracks.length > 0 && localTracks[0].publication.track ? <VideoTrack trackRef={localTracks[0]} className="vc-pip-core-video" style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} /> : null}{camOff && <div className="vc-pip-camera-blind"><VideoOffIcon /></div>}</div><div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}><div className="vc-status-badge"><span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} /><span className="vc-live-timer">{isConnected ? fmt(duration) : 'إشارة معلقة'}</span></div></div>{showChat && <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}><div className="vc-chat-top-header"><span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span><button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button></div><div className="vc-chat-scroller">{messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}{messages.map((msg, i) => <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}><div className="vc-bubble-text">{msg.message}</div></div>)}<div ref={messagesEndRef} /></div><div className="vc-chat-footer-composer"><input className="vc-chat-native-input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && !sendingMessage) void sendMessage(); }} placeholder="اكتب رسالة سريعة للطرف الآخر..."/><button type="button" className="vc-chat-submit-btn" onClick={() => { void sendMessage(); }} disabled={sendingMessage || !input.trim()} aria-label="إرسال رسالة"><SendIcon /></button></div>{chatSendError && <p role="alert" className="vc-chat-send-error">{chatSendError}</p>}</div>}<div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}><TrackToggle source={Track.Source.Microphone} showIcon={false} disabled={!isConnected} className={`vc-action-pill ${!isMicrophoneEnabled ? 'disabled' : ''}`} onChange={() => setMediaError(null)} onDeviceError={() => setMediaError('تعذر تغيير حالة الميكروفون. تأكد من أذونات الميكروفون وحاول مرة أخرى.')}><div className="vc-pill-icon-holder">{isMicrophoneEnabled ? <MicIcon /> : <MicOffIcon />}</div><span className="vc-pill-caption">{isMicrophoneEnabled ? 'كتم' : 'تشغيل'}</span></TrackToggle>{callType !== 'audio' && <TrackToggle source={Track.Source.Camera} showIcon={false} disabled={!isConnected} className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onChange={() => setMediaError(null)} onDeviceError={() => setMediaError('تعذر تغيير حالة الكاميرا. تأكد من أذونات الكاميرا وحاول مرة أخرى.')}><div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div><span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span></TrackToggle>}<button type="button" className="vc-action-pill" onClick={() => setMirrored(m => !m)}><div className="vc-pill-icon-holder"><FlipIcon /></div><span className="vc-pill-caption">عكس</span></button><button type="button" className={`vc-action-pill ${showChat ? 'active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}><div className="vc-pill-icon-holder"><ChatIcon /></div><span className="vc-pill-caption">الشات</span>{newMsg && !showChat && <span className="vc-unread-badge-dot" />}</button><button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}><div className="vc-pill-icon-holder"><NextIcon /></div><span className="vc-pill-caption">التالي</span></button><button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}><div className="vc-pill-icon-holder"><EndIcon /></div><span className="vc-pill-caption">خروج</span></button></div>{mediaError && <p className="vc-media-error" role="alert">{mediaError}</p>}</div>;
+  return <div className="vc-app-container" onClick={resetControlsTimer}><style>{STYLES}</style>{callType === 'audio' ? <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><span className="vc-connecting-headline">مكالمة صوتية {isConnected ? 'متصلة' : 'جاري الاتصال...'}</span></div> : remoteTracks.length > 0 && remoteTracks[0].publication.track ? <VideoTrack trackRef={remoteTracks[0]} className="vc-remote-stream-canvas" /> : <div className="vc-connecting-overlay"><div className="vc-radar-pulse" /><div className="vc-radar-pulse pulse-2" /><div className="vc-radar-pulse pulse-3" /><span className="vc-connecting-headline">جاري الاتصال المباشر بالشريك...</span></div>}<div className="vc-shading-top" /><div className="vc-shading-bottom" /><div className="vc-pip-container">{localTracks.length > 0 && localTracks[0].publication.track ? <VideoTrack trackRef={localTracks[0]} className="vc-pip-core-video" style={{ opacity: camOff ? 0 : 1, transform: mirrored ? 'scaleX(-1)' : 'scaleX(1)' }} /> : null}{camOff && <div className="vc-pip-camera-blind"><VideoOffIcon /></div>}</div><div className={`vc-topbar-layer ${showControls ? 'visible' : ''}`}><div className="vc-status-badge"><span className={`vc-live-indicator-dot ${isConnected ? 'live' : 'searching'}`} /><span className="vc-live-timer">{isConnected ? fmt(duration) : 'إشارة معلقة'}</span></div></div>{showChat && <div className="vc-chat-super-window" onClick={(e) => e.stopPropagation()}><div className="vc-chat-top-header"><span className="vc-header-title-flex"><ChatIcon /> نافذة المحادثة</span><button type="button" className="vc-chat-dismiss" onClick={closeChat}>✕</button></div><div className="vc-chat-scroller">{messages.length === 0 && <p className="vc-chat-blank-state">لا توجد رسائل بينكما، ابدأ النقاش الآن!</p>}{messages.map((msg, i) => <div key={msg.id ?? i} className={`vc-chat-bubble-row ${msg.sender_id === userId ? 'outgoing' : 'incoming'}`}><div className="vc-bubble-text">{msg.message}</div></div>)}<div ref={messagesEndRef} /></div><div className="vc-chat-footer-composer"><input className="vc-chat-native-input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && !sendingMessage) void sendMessage(); }} placeholder="اكتب رسالة سريعة للطرف الآخر..."/><button type="button" className="vc-chat-submit-btn" onClick={() => { void sendMessage(); }} disabled={sendingMessage || !input.trim()} aria-label="إرسال رسالة"><SendIcon /></button></div>{chatSendError && <p role="alert" className="vc-chat-send-error">{chatSendError}</p>}</div>}<div className={`vc-controls-floating-bar ${showControls ? 'visible' : ''}`} onClick={(e) => e.stopPropagation()}><TrackToggle source={Track.Source.Microphone} showIcon={false} disabled={!isConnected} className={`vc-action-pill ${!isMicrophoneEnabled ? 'disabled' : ''}`} onChange={() => setMediaError(null)} onDeviceError={() => setMediaError('تعذر تغيير حالة الميكروفون. تأكد من أذونات الميكروفون وحاول مرة أخرى.')}><div className="vc-pill-icon-holder">{isMicrophoneEnabled ? <MicIcon /> : <MicOffIcon />}</div><span className="vc-pill-caption">{isMicrophoneEnabled ? 'كتم' : 'تشغيل'}</span></TrackToggle>{callType !== 'audio' && <TrackToggle source={Track.Source.Camera} showIcon={false} disabled={!isConnected} className={`vc-action-pill ${camOff ? 'disabled' : ''}`} onChange={() => setMediaError(null)} onDeviceError={() => setMediaError('تعذر تغيير حالة الكاميرا. تأكد من أذونات الكاميرا وحاول مرة أخرى.')}><div className="vc-pill-icon-holder">{camOff ? <VideoOffIcon /> : <VideoIcon />}</div><span className="vc-pill-caption">{camOff ? 'كاميرا' : 'إيقاف'}</span></TrackToggle>}<button type="button" className="vc-action-pill" onClick={() => setMirrored(m => !m)}><div className="vc-pill-icon-holder"><FlipIcon /></div><span className="vc-pill-caption">عكس</span></button><button type="button" className={`vc-action-pill ${showChat ? 'active' : ''}`} onClick={showChat ? closeChat : openChat} style={{ position: 'relative' }}><div className="vc-pill-icon-holder"><ChatIcon /></div><span className="vc-pill-caption">الشات</span>{newMsg && !showChat && <span className="vc-unread-badge-dot" />}</button><button type="button" className="vc-action-pill vc-next-pulse-btn" onClick={() => triggerEndMatch('next')}><div className="vc-pill-icon-holder"><NextIcon /></div><span className="vc-pill-caption">التالي</span></button><button type="button" className="vc-action-pill vc-end-emergency-btn" onClick={() => triggerEndMatch('end')}><div className="vc-pill-icon-holder"><EndIcon /></div><span className="vc-pill-caption">خروج</span></button></div>{mediaError && <p className="vc-media-error" role="alert">{mediaError}</p>}{endError && <p className="vc-media-error" role="alert">{endError}</p>}</div>;
 }
 
 const STYLES = `
