@@ -21,7 +21,7 @@ export function createMatchEndStatusPoller(
     if (inFlight) return inFlight;
 
     const task = Promise.resolve()
-      .then(() => readStatus())
+      .then(() => disposed ? null : readStatus())
       .then(result => {
         if (disposed || ended || !result || result.error) return;
         if (result.data?.status === 'ended') {
