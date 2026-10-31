@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { supabase } from './supabase';
 import { endMatchOnServer } from './utils/endMatchOnServer';
 import { createCallMessageSender } from './utils/callMessageSender';
+import { createMatchEndStatusPoller } from './utils/matchEndStatusPoller';
 import { createIdempotentCallChatWriter } from './utils/idempotentCallChatWriter';
 import { createSessionCallChatAttemptStore } from './utils/sessionCallChatAttemptStore';
 import { mergeStreamChatHistory } from './utils/mergeStreamChatHistory';
@@ -269,16 +270,20 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
       onEndRef.current();
     };
 
-    const checkEnded = async () => {
-      const { data, error } = await supabase
-        .from('matches')
-        .select('status')
-        .eq('id', matchId)
-        .maybeSingle();
-      if (!disposed && !error && data?.status === 'ended') {
-        handleEnded();
-      }
-    };
+    // An offline/slow status query may outlive multiple 3-second polling
+    // intervals. Keep one request in flight and ignore results after exit.
+    const endStatusPoller = createMatchEndStatusPoller(
+      async () => {
+        const { data, error } = await supabase
+          .from('matches')
+          .select('status')
+          .eq('id', matchId)
+          .maybeSingle();
+        return { data, error };
+      },
+      handleEnded,
+    );
+    const checkEnded = () => endStatusPoller.check();
 
     // Only query this match after Realtime has subscribed. Fetching before
     // subscribing leaves a gap in which a message could be persisted but
@@ -330,6 +335,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
     const poll = setInterval(() => { void checkEnded(); }, 3000);
     return () => {
       disposed = true;
+      endStatusPoller.dispose();
       clearInterval(poll);
       void supabase.removeChannel(channel);
     };
