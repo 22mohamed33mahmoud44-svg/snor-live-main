@@ -1,3 +1,5 @@
+import type { CallChatAttemptPersistence } from './sessionCallChatAttemptStore';
+
 /**
  * Send a call-chat message with a stable client-generated database UUID until
  * its outcome is confirmed. A POST may have committed before the browser
@@ -15,6 +17,7 @@ export function createIdempotentCallChatWriter<T extends {
   createId: () => string,
   insertOnce: (id: string, message: string) => Promise<{ data?: T | null; error?: unknown } | null>,
   findSaved: (id: string) => Promise<{ data?: T | null; error?: unknown } | null>,
+  persistence?: CallChatAttemptPersistence,
 ) {
   let pending: { id: string; message: string } | null = null;
 
@@ -26,7 +29,13 @@ export function createIdempotentCallChatWriter<T extends {
   return {
     async persist(message: string): Promise<{ data: T | null; error: unknown | null }> {
       if (!pending || pending.message !== message) {
-        pending = { id: createId(), message };
+        // After same-tab reload, recover the previous UUID only for the
+        // exact same normalized draft. Do not persist the message itself.
+        let storedId: string | null = null;
+        try { storedId = await persistence?.load(message) ?? null; } catch { /* storage optional */ }
+        pending = { id: storedId ?? createId(), message };
+        // Persist before sending the write: its response may never arrive.
+        try { await persistence?.save(pending.id, message); } catch { /* storage optional */ }
       }
       const attempt = pending;
       let failure: unknown = new Error('Call chat insert could not be confirmed');
@@ -35,6 +44,7 @@ export function createIdempotentCallChatWriter<T extends {
         const inserted = await insertOnce(attempt.id, attempt.message);
         if (!inserted?.error && matchesAttempt(inserted?.data, attempt)) {
           pending = null;
+          try { persistence?.clear(attempt.id); } catch { /* storage optional */ }
           return { data: inserted.data!, error: null };
         }
         failure = inserted?.error ?? failure;
@@ -48,6 +58,7 @@ export function createIdempotentCallChatWriter<T extends {
         const existing = await findSaved(attempt.id);
         if (!existing?.error && matchesAttempt(existing?.data, attempt)) {
           pending = null;
+          try { persistence?.clear(attempt.id); } catch { /* storage optional */ }
           return { data: existing.data!, error: null };
         }
         failure = existing?.error ?? failure;
