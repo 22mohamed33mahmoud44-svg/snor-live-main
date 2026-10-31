@@ -41,6 +41,9 @@ jobs:
       - name: Check safe retry for failed-call exit and active-call hangup
         run: node --test tests/unit/callExitFailureWiring.test.mjs
 
+      - name: Verify timed call setup and fresh LiveKit retry wiring
+        run: node --test tests/unit/videoCallConnectionTimeout.test.mjs
+
       - name: Check viewer-only subscription and broadcaster media publishing
         run: node --test tests/unit/liveStreamMediaWiring.test.mjs
 
@@ -564,6 +567,9 @@ jobs:
 
       - name: Verify ended matches despite network or database failures
         run: deno test tests/unit/confirmMatchEnded.test.ts
+
+      - name: Bound LiveKit token wait and ignore stale requests
+        run: deno test tests/unit/timedCallTokenRequest.test.ts
 
       - name: Serialize stream launch requests and retry after failed writes
         run: deno test tests/unit/streamLaunchGate.test.ts
