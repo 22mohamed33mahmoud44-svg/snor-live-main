@@ -38,6 +38,9 @@ jobs:
       - name: Ensure call mute and camera controls update LiveKit tracks
         run: node --test tests/unit/livekitMediaControls.test.mjs
 
+      - name: Check safe retry for failed-call exit and active-call hangup
+        run: node --test tests/unit/callExitFailureWiring.test.mjs
+
       - name: Check viewer-only subscription and broadcaster media publishing
         run: node --test tests/unit/liveStreamMediaWiring.test.mjs
 
@@ -558,6 +561,9 @@ jobs:
 
       - name: Prevent phantom live streams when end calls fail
         run: deno test tests/unit/endLiveStreamOnServer.test.ts
+
+      - name: Verify ended matches despite network or database failures
+        run: deno test tests/unit/confirmMatchEnded.test.ts
 
       - name: Serialize stream launch requests and retry after failed writes
         run: deno test tests/unit/streamLaunchGate.test.ts
