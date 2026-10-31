@@ -21,7 +21,7 @@ test('pending UUID is saved before the network write and loaded on the next comp
   assert.match(writer, /pending = \{ id: storedId \?\? createId\(\), message \}/);
   assert.match(writer, /await persistence\?\.save\(pending\.id, message\)/);
   assert.ok(writer.indexOf('await persistence?.save(pending.id, message)') <
-    writer.indexOf('const inserted = await insertOnce(attempt.id, attempt.message)'),
+    writer.indexOf('const inserted = await insertOnce(attempt.id, attempt.message, controller.signal)'),
     'attempt ID must reach storage before ambiguous network insert');
   assert.equal((writer.match(/persistence\?\.clear\(attempt\.id\)/g) ?? []).length, 2,
     'both direct confirmation and recovery SELECT should clear saved metadata');
