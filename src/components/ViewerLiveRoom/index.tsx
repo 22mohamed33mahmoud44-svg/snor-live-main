@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../../supabase';
 import { createCallMessageSender } from '../../utils/callMessageSender';
+import { createStreamLikeBatcher } from '../../utils/streamLikeBatcher';
 import { acknowledgeStreamChatMessage, mergeStreamChatHistory } from '../../utils/mergeStreamChatHistory';
 import { motion, AnimatePresence } from 'framer-motion';
 // تم إزالة الأيقونة 'X' غير المستخدمة لتنظيف الكود
@@ -115,7 +116,26 @@ export default function ViewerLiveRoom({
   // مراجع لتحسين الأداء (Ref)
   const roomChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const timeoutsRef = useRef<number[]>([]);
-  const pendingLikesRef = useRef(0); // مرجع لتخزين الإعجابات المتراكمة لمنع الـ DDoS
+  // A failed database write must keep the pending count for a later attempt.
+  const likeBatcher = useMemo(() => createStreamLikeBatcher(async (count: number) => {
+    const channelAtFlush = roomChannelRef.current;
+    const { error } = await supabase.rpc('increment_stream_likes', {
+      target_stream_id: streamId,
+      increment_count: count,
+    });
+    if (error) {
+      console.error('فشل إرسال الإعجابات:', error);
+      return false;
+    }
+    // Notify other viewers only after the database confirmed the count.
+    // Never post an old stream's likes into a newly mounted room channel.
+    if (channelAtFlush && roomChannelRef.current === channelAtFlush) {
+      void channelAtFlush.send({
+        type: 'broadcast', event: 'like_batch', payload: { count },
+      });
+    }
+    return true;
+  }), [streamId]);
 
   const identityRef = useRef({ myUserId, myUsername, streamerId });
   useEffect(() => {
@@ -345,42 +365,18 @@ export default function ViewerLiveRoom({
     };
   }, [streamId, safeTimeout, showToast, spawnHeart, showGiftToast, triggerSparkleBurst, reconnectKey]);
 
-  // 🔄 عامل الخلفية (Worker) لإرسال الإعجابات كدفعة واحدة كل ثانيتين (تم إصلاح خطأ TypeScript هنا)
+  // Periodic batches are single-flight. Failed writes remain buffered for
+  // a later tick, and cleanup attempts one final best-effort flush.
   useEffect(() => {
-    let isMounted = true;
-    
-    const flushLikes = async () => {
-      const likesToSend = pendingLikesRef.current;
-      if (likesToSend > 0 && isMounted) {
-        pendingLikesRef.current = 0; // تصفير العداد للدفعة القادمة
+    const intervalId = window.setInterval(() => {
+      void likeBatcher.flush();
+    }, 2000);
 
-        // بث العدد كرسالة واحدة
-        roomChannelRef.current?.send({ 
-          type: 'broadcast', 
-          event: 'like_batch', 
-          payload: { count: likesToSend } 
-        });
-
-        // اتصال واحد فقط بقاعدة البيانات بطريقة نظيفة خالية من أخطاء TypeScript
-        const { error } = await supabase.rpc('increment_stream_likes', { 
-          target_stream_id: streamId,
-          increment_count: likesToSend 
-        });
-
-        if (error) {
-           console.error("فشل إرسال الإعجابات:", error);
-        }
-      }
-    };
-
-    const intervalId = setInterval(flushLikes, 2000);
-    
     return () => {
-      isMounted = false;
-      clearInterval(intervalId);
-      flushLikes(); // إرسال الإعجابات المتبقية قبل الخروج
+      window.clearInterval(intervalId);
+      void likeBatcher.finish();
     };
-  }, [streamId]);
+  }, [likeBatcher]);
 
   // جلب رصيد الجواهر والمتابعة
   useEffect(() => {
@@ -433,8 +429,8 @@ export default function ViewerLiveRoom({
   const sendLike = useCallback((clientX?: number) => {
     setLikesCount(prev => prev + 1);
     spawnHeart(clientX);
-    pendingLikesRef.current += 1;
-  }, [spawnHeart]);
+    likeBatcher.add();
+  }, [spawnHeart, likeBatcher]);
 
   const handleScreenTap = (e: React.MouseEvent) => { sendLike(e.clientX); };
 
