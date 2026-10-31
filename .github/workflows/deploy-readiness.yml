@@ -634,6 +634,9 @@ jobs:
       - name: Merge history with new and pending live stream chat safely
         run: deno test tests/unit/mergeStreamChatHistory.test.ts
 
+      - name: Acknowledge broadcaster chat without Realtime and preserve identical messages
+        run: deno test tests/unit/broadcasterChatAcknowledgement.test.ts
+
       - name: Serialize viewer like RPCs and flush unsent likes on exit
         run: deno test tests/unit/streamLikeBatcher.test.ts
 
