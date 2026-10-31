@@ -157,12 +157,12 @@ Deno.test('an old timed-out ended response cannot override a newer active-status
 });
 
 Deno.test('disposing an unresponsive fetch aborts it and resolves the in-flight poll', async () => {
-  let controllerSignal: AbortSignal | null = null;
+  let wasAborted = false;
   let callCount = 0;
   let ended = 0;
   const watcher = createMatchEndStatusPoller(
     signal => {
-      controllerSignal = signal;
+      signal.addEventListener('abort', () => { wasAborted = true; }, { once: true });
       callCount++;
       return new Promise<null>(() => {}); // an uncooperative network stack
     },
@@ -173,7 +173,7 @@ Deno.test('disposing an unresponsive fetch aborts it and resolves the in-flight 
   await Promise.resolve();
   watcher.dispose();
   await poll; // must resolve on abort, not after the 60-second timeout
-  assert(controllerSignal?.aborted === true && ended === 0 && callCount === 1,
+  assert(wasAborted && ended === 0 && callCount === 1,
     'dispose did not immediately release a hung call status fetch');
   await watcher.check();
   assert(callCount === 1, 'disposed watcher sent another request');
