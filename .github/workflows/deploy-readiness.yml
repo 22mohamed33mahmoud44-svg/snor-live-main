@@ -53,6 +53,9 @@ jobs:
       - name: Confirm outgoing call chat messages appear without a Realtime echo
         run: node --test tests/unit/callChatSavedAckWiring.test.mjs
 
+      - name: Timeout hung call chat sends while preserving retry IDs
+        run: node --test tests/unit/hungCallChatSendWiring.test.mjs
+
       - name: Keep uncertain call chat IDs across same-tab refresh without storing message text
         run: node --test tests/unit/sessionCallChatAttemptWiring.test.mjs
 
@@ -621,6 +624,9 @@ jobs:
 
       - name: Prevent duplicate call chat when an insert commits but its response is lost
         run: deno test tests/unit/idempotentCallChatWriter.test.ts
+
+      - name: Abort stuck call chat writes and recover lost confirmations
+        run: deno test tests/unit/hungCallChatSend.test.ts
 
       - name: Reuse pending chat UUID after refresh and expire stored retry metadata
         run: deno test tests/unit/sessionCallChatAttemptStore.test.ts
