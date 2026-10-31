@@ -44,6 +44,9 @@ jobs:
       - name: Restore call chat history after reconnect without losing live messages
         run: node --test tests/unit/callChatHistoryWiring.test.mjs
 
+      - name: Confirm outgoing call chat messages appear without a Realtime echo
+        run: node --test tests/unit/callChatSavedAckWiring.test.mjs
+
       - name: Verify timed call setup and fresh LiveKit retry wiring
         run: node --test tests/unit/videoCallConnectionTimeout.test.mjs
 
@@ -597,6 +600,9 @@ jobs:
 
       - name: Merge latest call chat messages with in-flight Realtime traffic
         run: deno test tests/unit/callChatHistory.test.ts
+
+      - name: Deduplicate persisted outgoing call messages across Realtime and history
+        run: deno test tests/unit/callChatSavedAck.test.ts
 
       - name: Merge history with new and pending live stream chat safely
         run: deno test tests/unit/mergeStreamChatHistory.test.ts
