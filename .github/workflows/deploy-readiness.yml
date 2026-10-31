@@ -65,6 +65,9 @@ jobs:
       - name: Prevent indefinite viewer stream connection loading
         run: node --test tests/unit/viewerStreamConnectionWiring.test.mjs
 
+      - name: Ignore old viewer LiveKit room callbacks during retry
+        run: node --test tests/unit/viewerStaleRoomCallbacks.test.mjs
+
       - name: Check broadcaster token and publishing recovery
         run: node --test tests/unit/broadcasterConnectionRecovery.test.mjs
 
