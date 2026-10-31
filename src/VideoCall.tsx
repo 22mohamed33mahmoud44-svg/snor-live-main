@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { supabase } from './supabase';
 import { endMatchOnServer } from './utils/endMatchOnServer';
 import { createCallMessageSender } from './utils/callMessageSender';
+import { createIdempotentCallChatWriter } from './utils/idempotentCallChatWriter';
 import { mergeStreamChatHistory } from './utils/mergeStreamChatHistory';
 import { beginTimedCallTokenRequest } from './utils/timedCallTokenRequest';
 import { LiveKitRoom, RoomAudioRenderer, StartAudio, TrackToggle, useLocalParticipant, useTracks, VideoTrack, useConnectionState } from '@livekit/components-react';
@@ -196,17 +197,33 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   const [input, setInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
-  const messageSender = useMemo(() => createCallMessageSender<CallChatMessage>(async (message) => {
-    // A confirmed DB row is needed for displaying an outgoing message even
-    // when the sender's Realtime subscription is delayed or disconnected.
-    const { data, error } = await supabase.from('messages').insert({
-      match_id: matchId, sender_id: userId, message,
-    }).select('id, sender_id, message, created_at').single();
-    return {
-      data,
-      error: error ?? (!data?.id ? new Error('Missing saved call chat message ID') : null),
-    };
-  }), [matchId, userId]);
+  const messageSender = useMemo(() => {
+    const writer = createIdempotentCallChatWriter<CallChatMessage>(
+      () => crypto.randomUUID(),
+      async (id, message) => {
+        // Primary key stays constant after an ambiguous network failure.
+        // DO NOTHING on conflict prevents a second DB row on retry.
+        const { data, error } = await supabase.from('messages').upsert({
+          id, match_id: matchId, sender_id: userId, message,
+        }, { onConflict: 'id', ignoreDuplicates: true })
+          .select('id, sender_id, message, created_at')
+          .maybeSingle();
+        return { data, error };
+      },
+      async id => {
+        // If the first write committed but confirmation was lost, this
+        // participant-scoped read can safely acknowledge the existing row.
+        const { data, error } = await supabase.from('messages')
+          .select('id, sender_id, message, created_at')
+          .eq('id', id)
+          .eq('match_id', matchId)
+          .eq('sender_id', userId)
+          .maybeSingle();
+        return { data, error };
+      },
+    );
+    return createCallMessageSender<CallChatMessage>(message => writer.persist(message));
+  }, [matchId, userId]);
   const [showChat, setShowChat] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [newMsg, setNewMsg] = useState(false);
