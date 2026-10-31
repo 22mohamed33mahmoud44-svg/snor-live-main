@@ -74,6 +74,9 @@ jobs:
       - name: Preserve latest live stream chat during historical message fetches
         run: node --test tests/unit/streamChatHistoryWiring.test.mjs
 
+      - name: Backfill stream chat only after Realtime subscribes or reconnects
+        run: node --test tests/unit/streamChatSubscribeBeforeHistory.test.mjs
+
       - name: Verify viewer likes survive failed batch writes and exit
         run: node --test tests/unit/viewerLikeBatchWiring.test.mjs
 
