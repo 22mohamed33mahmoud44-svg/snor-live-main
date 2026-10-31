@@ -196,11 +196,16 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   const [input, setInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
-  const messageSender = useMemo(() => createCallMessageSender(async (message) => {
-    const { error } = await supabase.from('messages').insert({
+  const messageSender = useMemo(() => createCallMessageSender<CallChatMessage>(async (message) => {
+    // A confirmed DB row is needed for displaying an outgoing message even
+    // when the sender's Realtime subscription is delayed or disconnected.
+    const { data, error } = await supabase.from('messages').insert({
       match_id: matchId, sender_id: userId, message,
-    });
-    return { error };
+    }).select('id, sender_id, message, created_at').single();
+    return {
+      data,
+      error: error ?? (!data?.id ? new Error('Missing saved call chat message ID') : null),
+    };
   }), [matchId, userId]);
   const [showChat, setShowChat] = useState(false);
   const [showControls, setShowControls] = useState(true);
@@ -333,7 +338,12 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
     setChatSendError(null);
     try {
       const result = await messageSender.send(draft);
-      if (result.status === 'sent') {
+      if (result.status === 'sent' && result.data?.id) {
+        // A successful insert should render without requiring a Realtime
+        // echo. Merge by DB ID so history/replayed INSERTs cannot duplicate it.
+        setMessages(current => mergeStreamChatHistory<CallChatMessage>(
+          [result.data!], current, CALL_CHAT_HISTORY_LIMIT,
+        ));
         // Do not clear characters the user typed during the pending request.
         setInput(current => current === draft ? '' : current);
       } else if (result.status === 'failed') {
