@@ -18,13 +18,13 @@ test('token fetch has a bounded wait and ignores old attempts on retry', () => {
 
 test('room errors, disconnects, and connection stalls show a recovery state', () => {
   assert.match(source, /const VIEWER_MEDIA_TIMEOUT_MS = 30_000/);
-  assert.match(source, /onConnected=\{handleMediaConnected\}/);
-  assert.match(source, /onDisconnected=\{handleMediaDisconnected\}/);
-  assert.match(source, /onError=\{handleMediaError\}/);
+  assert.match(source, /onConnected=\{\(\) => handleMediaConnected\(roomAttemptId\)\}/);
+  assert.match(source, /onDisconnected=\{\(\) => handleMediaDisconnected\(roomAttemptId\)\}/);
+  assert.match(source, /onError=\{\(error\) => handleMediaError\(roomAttemptId, error\)\}/);
   assert.match(source, /if \(!liveKitToken \|\| mediaConnected \|\| connectionError\) return/);
   assert.match(source, /\[liveKitToken, mediaConnected, connectionError\]/);
   assert.match(source, /setConnectionError\('تأخر الاتصال بالبث/);
-  assert.match(source, /key=\{\x60\$\{streamId\}-\$\{connectionAttempt\}\x60\}/);
+  assert.match(source, /key=\{roomAttemptId\}/);
 });
 
 test('viewer sees actionable error with reconnect and back controls instead of endless spinner', () => {
