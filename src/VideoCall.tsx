@@ -218,17 +218,18 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
     );
     const writer = createIdempotentCallChatWriter<CallChatMessage>(
       () => crypto.randomUUID(),
-      async (id, message) => {
+      async (id, message, signal) => {
         // Primary key stays constant after an ambiguous network failure.
         // DO NOTHING on conflict prevents a second DB row on retry.
         const { data, error } = await supabase.from('messages').upsert({
           id, match_id: matchId, sender_id: userId, message,
         }, { onConflict: 'id', ignoreDuplicates: true })
           .select('id, sender_id, message, created_at')
+          .abortSignal(signal)
           .maybeSingle();
         return { data, error };
       },
-      async id => {
+      async (id, signal) => {
         // If the first write committed but confirmation was lost, this
         // participant-scoped read can safely acknowledge the existing row.
         const { data, error } = await supabase.from('messages')
@@ -236,6 +237,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
           .eq('id', id)
           .eq('match_id', matchId)
           .eq('sender_id', userId)
+          .abortSignal(signal)
           .maybeSingle();
         return { data, error };
       },
@@ -378,11 +380,14 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
   };
   const sendMessage = async () => {
     const draft = input;
-    if (!draft.trim() || messageSender.isSending()) return;
+    if (!draft.trim() || messageSender.isSending() || !navigationGuard.isActive()) return;
     setSendingMessage(true);
     setChatSendError(null);
     try {
       const result = await messageSender.send(draft);
+      // The user may have left or advanced to another match during the
+      // bounded request. Never publish its UI result into a disposed call.
+      if (!navigationGuard.isActive()) return;
       if (result.status === 'sent' && result.data?.id) {
         // A successful insert should render without requiring a Realtime
         // echo. Merge by DB ID so history/replayed INSERTs cannot duplicate it.
@@ -395,7 +400,7 @@ function CallUI({ userId, matchId, callType = 'video', onEnd, onNext }: Props) {
         setChatSendError('تعذر إرسال الرسالة. الرسالة محفوظة هنا، حاول مرة أخرى.');
       }
     } finally {
-      setSendingMessage(false);
+      if (navigationGuard.isActive()) setSendingMessage(false);
     }
   };
   const openChat = () => { setShowChat(true); setNewMsg(false); setShowControls(true); };
