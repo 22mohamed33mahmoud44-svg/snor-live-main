@@ -717,16 +717,28 @@ export default function ActiveLiveRoom({
     let isMounted = true;
     startHeartbeat();
 
-    supabase.from('stream_chat').select('*').eq('stream_id', streamId).order('created_at', { ascending: false }).limit(MESSAGES_LIMIT)
-      .then(({ data }) => {
-        if (!isMounted || !data) return;
+    const fetchOldMessages = async () => {
+      try {
+        const { data, error } = await supabase.from('stream_chat')
+          .select('*').eq('stream_id', streamId)
+          .order('created_at', { ascending: false }).limit(MESSAGES_LIMIT);
+        if (!isMounted) return;
+        if (error) {
+          console.warn('Unable to load broadcaster chat history:', error);
+          return;
+        }
+        if (!data) return;
         const recentHistory: ChatMessage[] = data.slice().reverse().map(m => ({
           id: m.id, user: m.username, userId: m.user_id, text: m.message,
           color: m.user_id === myUserId ? '#ff2a74' : '#00d4ff',
           created_at: m.created_at,
         }));
+        // A message may arrive from Realtime while history is in flight.
         setChatMessages(current => mergeStreamChatHistory(recentHistory, current, MESSAGES_LIMIT));
-      });
+      } catch (error) {
+        if (isMounted) console.warn('Broadcaster chat history request failed:', error);
+      }
+    };
 
     const roomChannel = supabase.channel(`room-${streamId}`, { config: { presence: { key: myUserId } } });
     roomChannelRef.current = roomChannel;
@@ -763,7 +775,12 @@ export default function ActiveLiveRoom({
         setViewers(Math.max(1, Object.keys(state).length));
       })
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') roomChannel.track({ user_id: String(myUserId), role: 'streamer', online_at: new Date().toISOString() });
+        if (status === 'SUBSCRIBED' && isMounted) {
+          // Backfill after subscription, including each Realtime reconnect,
+          // so there is no SELECT-before-subscribe gap for incoming messages.
+          void roomChannel.track({ user_id: String(myUserId), role: 'streamer', online_at: new Date().toISOString() });
+          void fetchOldMessages();
+        }
       });
 
     supabase.from('live_streams').select('likes_count').eq('id', streamId).maybeSingle().then(({ data }) => {
