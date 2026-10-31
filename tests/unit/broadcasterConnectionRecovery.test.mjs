@@ -27,11 +27,11 @@ test('reconnection and publish failure are actionable, without stale room reuse'
   assert.match(room, /const retryMediaConnection = useCallback\(\(\) => \{/);
   assert.match(room, /setLiveKitToken\(null\)/);
   assert.match(room, /setConnectionAttempt\(attempt => attempt \+ 1\)/);
-  assert.match(room, /onError=\{handleMediaFailure\}/);
+  assert.match(room, /onError=\{\(error\) => handleMediaFailure\(roomAttemptId, error\)\}/);
   assert.match(room, /onDisconnected=\{\(\) => \{/);
-  assert.match(room, /onPublishError=\{handleMediaFailure\}/);
+  assert.match(room, /onPublishError=\{\(error\) => handleMediaFailure\(roomAttemptId, error\)\}/);
   assert.match(room, /\}, 35_000\)/);
-  assert.match(room, /key=\{\x60\$\{streamId\}-\$\{connectionAttempt\}\x60\}/);
+  assert.match(room, /key=\{roomAttemptId\}/);
 });
 
 test('broadcaster can end a stream safely when media never becomes available', () => {
@@ -41,5 +41,5 @@ test('broadcaster can end a stream safely when media never becomes available', (
   assert.match(room, /onClick=\{\(\) => setShowEndModal\(true\)\}/);
   assert.match(room, /if \(liveKitToken && !broadcastProblem\)/);
   assert.match(room, /<LiveKitRoom[\s\S]*video=\{false\}[\s\S]*audio=\{false\}/);
-  assert.match(room, /<StreamPublisher[\s\S]*onPublished=\{handleMediaPublished\}/);
+  assert.match(room, /<StreamPublisher[\s\S]*onPublished=\{\(\) => handleMediaPublished\(roomAttemptId\)\}/);
 });
