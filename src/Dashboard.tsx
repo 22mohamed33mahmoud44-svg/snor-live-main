@@ -384,28 +384,11 @@ export default function Dashboard({ userId = 'me', onLogout = () => {} }: Dashbo
 // 🚀 المكونات المعزولة (لضمان السلاسة ومنع الـ Re-render الشامل)
 // ─────────────────────────────────────────────────────────────────
 
-const HomeTab = memo(() => {
-  const [category, setCategory] = useState<string>('all');
-  return (
-    <div className="tab-fadein" style={{ padding: '16px 20px' }}>
-      <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: '14px', marginBottom: '8px' }}>
-        {[
-          { key: 'all', label: '🔥 الكل' },
-          { key: 'hd', label: '🎥 كاميرا HD' },
-          { key: 'global', label: '🌍 دولي' }
-        ].map(cat => (
-          <button key={cat.key} onClick={() => setCategory(cat.key)} className={`category-badge ${category === cat.key ? 'active' : ''}`}>
-            {cat.label}
-          </button>
-        ))}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-        <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>بث مباشر الآن 🔥</h3>
-      </div>
-      <LiveStreamGrid />
-    </div>
-  );
-});
+const HomeTab = memo(() => (
+  <div className="tab-fadein" style={{ padding: '16px 20px' }}>
+    <LiveStreamGrid />
+  </div>
+));
 
 const MatchTab = memo(({ onStartRandomMatch }: { onStartRandomMatch: () => void }) => {
   const [matchGender, setMatchGender] = useState<string>('all');
