@@ -99,6 +99,8 @@ jobs:
         run: node --test tests/unit/broadcasterCameraLifecycleWiring.test.mjs
       - name: Ensure LiveKit room remount reattaches broadcaster video instead of black preview
         run: node --test tests/unit/broadcasterBlackPreview.test.mjs
+      - name: Keep portrait mobile-size live video on desktop without cropping
+        run: node --test tests/unit/livePortraitDesktopLayout.test.mjs
 
       - name: Prevent duplicate livestream creation and camera leaks in studio
         run: node --test tests/unit/liveStreamLaunchWiring.test.mjs
