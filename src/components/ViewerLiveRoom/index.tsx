@@ -16,6 +16,7 @@ import '@livekit/components-styles';
 
 // استيراد المكونات الفرعية التي قمنا بفصلها
 import LiveHeader from './LiveHeader';
+import ShareLiveButton from '../ShareLiveButton';
 import LiveChat from './LiveChat';
 import LiveGiftsPanel, { GiftDef } from './LiveGiftsPanel';
 
@@ -675,6 +676,7 @@ export default function ViewerLiveRoom({
               </div>
 
               {/* أزرار التفاعل السريع بحجم 44x44 بيكسل لسهولة اللمس على الموبايل */}
+              <ShareLiveButton streamId={streamId} title={title} />
               <button type="button" onClick={() => setShowGiftPanel(true)} style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fbbf24', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}><Gift size={20} /></button>
               <button type="button" onClick={(e) => { e.stopPropagation(); triggerSparkleBurst(); roomChannelRef.current?.send({ type: 'broadcast', event: 'super', payload: {} }); }} style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#c084fc', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}><Sparkles size={20} /></button>
               <button type="button" onClick={() => sendLike()} style={{ width: 44, height: 44, borderRadius: '50%', background: 'linear-gradient(135deg, #ff2a74, #ff5388)', border: 'none', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}><Heart size={18} fill="currentColor" /></button>
