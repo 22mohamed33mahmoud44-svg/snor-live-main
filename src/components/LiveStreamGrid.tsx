@@ -7,6 +7,13 @@ import {
   type LiveDiscoveryItem, type LiveDiscoveryEvent,
 } from '../utils/liveDiscovery.mjs';
 
+// Supabase's untyped Realtime payload is not guaranteed to contain a row ID.
+// This explicit type guard makes incomplete events harmless and type-safe.
+function hasStreamId(value: unknown): value is { id: string } {
+  return value !== null && typeof value === 'object' &&
+    'id' in value && typeof value.id === 'string';
+}
+
 // A card preserves its identity when unrelated live streams change.
 const StreamCard = memo(({ stream, onClick }: { stream: LiveDiscoveryItem; onClick: () => void }) => {
   const formatCount = (count: number) => count >= 1000 ? (count / 1000).toFixed(1) + 'K' : String(count);
@@ -108,8 +115,8 @@ export default function LiveStreamGrid() {
           eventType: payload.eventType as LiveDiscoveryEvent['eventType'],
           // DELETE records may contain only the primary key, and malformed
           // Realtime events should never enter the visible discovery list.
-          new: next && typeof next === 'object' && 'id' in next && typeof next.id === 'string' ? next : undefined,
-          old: previous && typeof previous === 'object' && 'id' in previous && typeof previous.id === 'string' ? previous : undefined,
+          new: hasStreamId(next) ? next : undefined,
+          old: hasStreamId(previous) ? previous : undefined,
         };
         eventVersionRef.current += 1;
         recentEventsRef.current.push({ version: eventVersionRef.current, event });
