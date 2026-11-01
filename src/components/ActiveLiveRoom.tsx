@@ -61,10 +61,19 @@ const styles = {
     width: '100vw', height: '100dvh',
     background: '#000', zIndex: 9999,
     display: 'flex', flexDirection: 'column' as const,
+    alignItems: 'center', justifyContent: 'center',
     direction: 'rtl' as const,
     fontFamily: "'Cairo', sans-serif",
     overflow: 'hidden',
     WebkitTapHighlightColor: 'transparent',
+  },
+  phoneFrame: {
+    position: 'relative' as const,
+    overflow: 'hidden',
+    background: '#000',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    flexShrink: 0,
   },
   videoWrapper: {
     position: 'absolute' as const,
@@ -72,7 +81,6 @@ const styles = {
   },
   video: {
     width: '100%', height: '100%',
-    objectFit: 'cover' as const,
     transform: 'scaleX(-1)',
   },
   videoOverlay: {
@@ -239,6 +247,20 @@ const styles = {
 } as const;
 
 const globalStyles = `
+  /* Phone-sized portrait broadcast on desktop; real fullscreen on phones. */
+  .snor-broadcaster-phone-frame { width: 100%; height: 100%; }
+  .snor-broadcaster-video { object-fit: cover; }
+  @media (min-width: 768px) {
+    .snor-broadcaster-phone-frame {
+      width: min(420px, 50.625dvh, calc(100vw - 24px));
+      height: auto;
+      aspect-ratio: 9 / 16;
+      border-radius: 18px;
+      box-shadow: 0 18px 70px rgba(0, 0, 0, 0.85);
+    }
+    /* A landscape desktop webcam must not be enlarged/cropped to fill 9:16. */
+    .snor-broadcaster-video { object-fit: contain; }
+  }
   @keyframes giftSlideIn {
     from { opacity: 0; transform: translateY(-16px) scale(0.92); }
     to   { opacity: 1; transform: translateY(0) scale(1); }
@@ -892,6 +914,7 @@ export default function ActiveLiveRoom({
   const roomContent = (
     <div style={styles.root}>
       <style>{globalStyles}</style>
+      <div className="snor-broadcaster-phone-frame" style={styles.phoneFrame}>
 
       {/* فيديو */}
       <div style={styles.videoWrapper}>
@@ -903,6 +926,7 @@ export default function ActiveLiveRoom({
         )}
         <video
           ref={attachPreviewVideo}
+          className="snor-broadcaster-video"
           autoPlay
           playsInline
           muted
@@ -990,6 +1014,7 @@ export default function ActiveLiveRoom({
           error={endError}
         />
       )}
+      </div>
     </div>
   );
 
