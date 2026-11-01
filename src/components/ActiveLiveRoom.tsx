@@ -4,6 +4,7 @@ import { supabase } from '../supabase';
 import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
 import { createCallMessageSender } from '../utils/callMessageSender';
 import { createCancelableMediaCapture } from '../utils/cancelableMediaCapture';
+import { attachLocalPreview } from '../utils/attachLocalPreview.mjs';
 import { addStreamLikeBatch, reconcileStreamLikeSnapshot } from '../utils/streamLikeCounter';
 import { mergeStreamChatHistory, acknowledgeStreamChatMessage } from '../utils/mergeStreamChatHistory';
 import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
@@ -492,8 +493,14 @@ export default function ActiveLiveRoom({
   const activeRoomAttemptRef = useRef(roomAttemptId);
   activeRoomAttemptRef.current = roomAttemptId;
 
-  const videoRef            = useRef<HTMLVideoElement>(null);
+  const videoRef            = useRef<HTMLVideoElement | null>(null);
   const streamRef           = useRef<MediaStream | null>(null);
+  // LiveKitRoom mounts a new video DOM node after the token arrives (and on
+  // reconnect). Re-attach the *same* camera stream to every new node.
+  const attachPreviewVideo = useCallback((video: HTMLVideoElement | null) => {
+    videoRef.current = video;
+    attachLocalPreview(video, streamRef.current);
+  }, []);
   const roomChannelRef      = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const heartbeatRef        = useRef<ReturnType<typeof setInterval> | null>(null);
   const heartbeatRunning    = useRef(false);
@@ -647,7 +654,7 @@ export default function ActiveLiveRoom({
 
     if (initialStream) {
       streamRef.current = initialStream;
-      if (videoRef.current) videoRef.current.srcObject = initialStream;
+      attachLocalPreview(videoRef.current, initialStream);
       const hasLiveTracks = initialStream.getTracks().some(track => track.readyState === 'live');
       setCameraReady(hasLiveTracks);
       if (!hasLiveTracks) {
@@ -657,7 +664,7 @@ export default function ActiveLiveRoom({
       return () => {
         initialStream.getTracks().forEach(track => track.stop());
         if (streamRef.current === initialStream) streamRef.current = null;
-        if (videoRef.current) videoRef.current.srcObject = null;
+        attachLocalPreview(videoRef.current, null);
       };
     }
 
@@ -668,7 +675,7 @@ export default function ActiveLiveRoom({
       }),
       stream => {
         streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
+        attachLocalPreview(videoRef.current, stream);
         setCameraReady(true);
       },
       error => {
@@ -684,7 +691,7 @@ export default function ActiveLiveRoom({
       // The helper stops every late track and ignores old permission errors.
       capture.dispose();
       streamRef.current = null;
-      if (videoRef.current) videoRef.current.srcObject = null;
+      attachLocalPreview(videoRef.current, null);
     };
   }, [initialStream, cameraAttempt]);
 
@@ -895,7 +902,7 @@ export default function ActiveLiveRoom({
           </div>
         )}
         <video
-          ref={videoRef}
+          ref={attachPreviewVideo}
           autoPlay
           playsInline
           muted

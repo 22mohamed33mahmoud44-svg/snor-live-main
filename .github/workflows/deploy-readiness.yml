@@ -97,6 +97,8 @@ jobs:
 
       - name: Ensure broadcaster media capture stops on unmount and handles permission failures
         run: node --test tests/unit/broadcasterCameraLifecycleWiring.test.mjs
+      - name: Ensure LiveKit room remount reattaches broadcaster video instead of black preview
+        run: node --test tests/unit/broadcasterBlackPreview.test.mjs
 
       - name: Prevent duplicate livestream creation and camera leaks in studio
         run: node --test tests/unit/liveStreamLaunchWiring.test.mjs
