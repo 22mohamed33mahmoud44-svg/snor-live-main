@@ -493,7 +493,7 @@ export default function ActiveLiveRoom({
   const activeRoomAttemptRef = useRef(roomAttemptId);
   activeRoomAttemptRef.current = roomAttemptId;
 
-  const videoRef            = useRef<HTMLVideoElement>(null);
+  const videoRef            = useRef<HTMLVideoElement | null>(null);
   const streamRef           = useRef<MediaStream | null>(null);
   // LiveKitRoom mounts a new video DOM node after the token arrives (and on
   // reconnect). Re-attach the *same* camera stream to every new node.
