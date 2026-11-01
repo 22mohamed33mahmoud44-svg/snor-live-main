@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useAuth, OnboardingData } from './hooks/useAuth';
 import { shouldShowProfileError } from './utils/profileGate';
+import { readLiveInvite } from './utils/liveInvite.mjs';
 import { translations } from './translations';
 
 type Match = {
@@ -110,6 +111,22 @@ function App() {
         {!user && <Auth isOpen={showAuth} onClose={() => setShowAuth(false)} />}
         {user && showProfile && <Profile userId={user.id} onLogout={() => { logout(); setShowProfile(false); }} onClose={() => setShowProfile(false)} onStartRandomMatch={() => { setShowProfile(false); setShowRandomMatch(true); }} />}
         <Navbar user={user} t={t} toggleLanguage={toggleLanguage} onShowAuth={() => setShowAuth(true)} onShowProfile={() => setShowProfile(true)} />
+        {!user && readLiveInvite(window.location.search) && (
+          <div role="status" dir="rtl" style={{
+            margin: '14px auto', maxWidth: 560, padding: '16px 20px',
+            borderRadius: 16, background: 'rgba(14,116,144,.15)',
+            border: '1px solid rgba(34,211,238,.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            flexWrap: 'wrap', gap: 12, color: '#fff',
+          }}>
+            <span>📺 وصلك رابط دعوة لبث مباشر! سجّل دخولك علشان تشاهده.</span>
+            <button type="button" onClick={() => setShowAuth(true)} style={{
+              border: 0, background: '#0891b2', color: '#fff',
+              borderRadius: 10, padding: '10px 14px', fontWeight: 700,
+              cursor: 'pointer',
+            }}>تسجيل الدخول للمشاهدة</button>
+          </div>
+        )}
         <Home lang={lang} t={t} user={user} onShowAuth={() => setShowAuth(true)} onStartRandomMatch={() => setShowRandomMatch(true)} />
       </div>
     </Suspense>
