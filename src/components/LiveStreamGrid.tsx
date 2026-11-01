@@ -102,10 +102,14 @@ export default function LiveStreamGrid() {
 
     const channel = supabase.channel('live_streams_discovery')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'live_streams' }, payload => {
+        const next = 'new' in payload ? payload.new : null;
+        const previous = 'old' in payload ? payload.old : null;
         const event: LiveDiscoveryEvent = {
           eventType: payload.eventType as LiveDiscoveryEvent['eventType'],
-          new: 'new' in payload ? payload.new : undefined,
-          old: 'old' in payload ? payload.old : undefined,
+          // DELETE records may contain only the primary key, and malformed
+          // Realtime events should never enter the visible discovery list.
+          new: next && typeof next === 'object' && 'id' in next && typeof next.id === 'string' ? next : undefined,
+          old: previous && typeof previous === 'object' && 'id' in previous && typeof previous.id === 'string' ? previous : undefined,
         };
         eventVersionRef.current += 1;
         recentEventsRef.current.push({ version: eventVersionRef.current, event });
