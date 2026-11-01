@@ -103,6 +103,8 @@ jobs:
         run: node --test tests/unit/livePortraitDesktopLayout.test.mjs
       - name: Search, rank and reconcile live discovery without losing Realtime updates
         run: node --test tests/unit/liveDiscovery.test.mjs
+      - name: Verify live share links join only active rooms with safe permissions
+        run: node --test tests/unit/liveInviteLinks.test.mjs
 
       - name: Prevent duplicate livestream creation and camera leaks in studio
         run: node --test tests/unit/liveStreamLaunchWiring.test.mjs

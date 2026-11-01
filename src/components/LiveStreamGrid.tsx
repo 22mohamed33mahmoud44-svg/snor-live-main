@@ -2,6 +2,7 @@ import { useState, useEffect, memo, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../supabase';
 import { Users, Heart, Tv, Search, RefreshCw, Radio } from 'lucide-react';
 import ViewerLiveRoom from './ViewerLiveRoom';
+import { readLiveInvite, clearLiveInviteUrl } from '../utils/liveInvite.mjs';
 import {
   streamFromRow, applyLiveStreamChange, filterAndSortLiveStreams, LIVE_DISCOVERY_LIMIT,
   type LiveDiscoveryItem, type LiveDiscoveryEvent,
@@ -55,6 +56,7 @@ export default function LiveStreamGrid() {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<'popular' | 'recent'>('popular');
   const [activeStream, setActiveStream] = useState<LiveDiscoveryItem | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
   const [myUserId, setMyUserId] = useState('');
   const [myUsername, setMyUsername] = useState('متابع');
 
@@ -135,6 +137,33 @@ export default function LiveStreamGrid() {
     };
   }, [refreshStreams]);
 
+  // Invite links must resolve against the database, not just the discovery
+  // page's limited 50-stream snapshot. Only live broadcasts may be joined.
+  useEffect(() => {
+    const invitedStreamId = readLiveInvite(window.location.search);
+    if (!invitedStreamId || !myUserId) return;
+    let cancelled = false;
+    const openInvitedStream = async () => {
+      const { data, error } = await supabase.from('live_streams')
+        .select('*').eq('id', invitedStreamId).eq('is_live', true).maybeSingle();
+      if (cancelled) return;
+      if (error || !data) {
+        setInviteError('البث اللي اتدعيت له انتهى أو مش متاح دلوقتي.');
+        window.history.replaceState(window.history.state, '', clearLiveInviteUrl(window.location.href));
+        return;
+      }
+      if (data.user_id === myUserId) {
+        setInviteError('ده بثك أنت. افتح شاشة المذيع من حسابك بدل رابط المشاهدة.');
+        window.history.replaceState(window.history.state, '', clearLiveInviteUrl(window.location.href));
+        return;
+      }
+      setInviteError(null);
+      setActiveStream(streamFromRow(data));
+    };
+    void openInvitedStream();
+    return () => { cancelled = true; };
+  }, [myUserId]);
+
   const visibleStreams = useMemo(
     () => filterAndSortLiveStreams(streams, search, sort),
     [streams, search, sort],
@@ -149,7 +178,12 @@ export default function LiveStreamGrid() {
         streamerId={activeStream.user_id}
         myUserId={myUserId}
         myUsername={myUsername}
-        onExit={() => setActiveStream(null)}
+        onExit={() => {
+          setActiveStream(null);
+          if (readLiveInvite(window.location.search)) {
+            window.history.replaceState(window.history.state, '', clearLiveInviteUrl(window.location.href));
+          }
+        }}
       />
     );
   }
@@ -190,6 +224,8 @@ export default function LiveStreamGrid() {
         ))}
         <span role="status" className="mr-auto text-white/45 text-xs">{visibleStreams.length} بث متاح</span>
       </div>
+
+      {inviteError && <p role="alert" className="mb-4 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-sm text-amber-200">{inviteError}</p>}
 
       {loadError && (
         <div role="alert" className="mb-4 flex flex-wrap justify-between gap-3 items-center p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-sm">

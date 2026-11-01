@@ -5,6 +5,7 @@ import { endLiveStreamOnServer } from '../utils/endLiveStreamOnServer';
 import { createCallMessageSender } from '../utils/callMessageSender';
 import { createCancelableMediaCapture } from '../utils/cancelableMediaCapture';
 import { attachLocalPreview } from '../utils/attachLocalPreview.mjs';
+import ShareLiveButton from './ShareLiveButton';
 import { addStreamLikeBatch, reconcileStreamLikeSnapshot } from '../utils/streamLikeCounter';
 import { mergeStreamChatHistory, acknowledgeStreamChatMessage } from '../utils/mergeStreamChatHistory';
 import { LiveKitRoom, useRoomContext, useConnectionState } from '@livekit/components-react';
@@ -976,6 +977,7 @@ export default function ActiveLiveRoom({
           <div style={styles.statsRow}>
             <div style={styles.statBadge}>👁️ {viewers}</div>
             <div style={styles.statBadge}>❤️ {likesCount}</div>
+            <ShareLiveButton compact streamId={streamId} title={title} />
             <div style={{ width: 8 }} />
             <button onClick={() => setShowEndModal(true)} style={styles.endButton} aria-label="إنهاء البث">✕</button>
           </div>
