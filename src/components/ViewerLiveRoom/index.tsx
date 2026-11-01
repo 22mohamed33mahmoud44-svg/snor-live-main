@@ -532,7 +532,20 @@ export default function ViewerLiveRoom({
       // استخدام 100dvh لضمان التوافق مع متصفحات الموبايل (مثل سفاري)
       style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100dvh', background: '#05050c', zIndex: 2147483647, display: 'flex', justifyContent: 'center', alignItems: 'center', direction: 'rtl', fontFamily: "'Cairo', sans-serif" }}
     >
-      <div style={{ width: '100%', maxWidth: '440px', height: '100%', background: '#000', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 0 60px rgba(0,0,0,0.8)' }}>
+      <style>{`
+        .snor-viewer-phone-frame { width: 100%; height: 100%; }
+        .snor-viewer-video { object-fit: cover; }
+        @media (min-width: 768px) {
+          .snor-viewer-phone-frame {
+            width: min(420px, 50.625dvh, calc(100vw - 24px));
+            height: auto;
+            aspect-ratio: 9 / 16;
+            border-radius: 18px;
+          }
+          .snor-viewer-video { object-fit: contain; }
+        }
+      `}</style>
+      <div className="snor-viewer-phone-frame" style={{ background: '#000', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 0 60px rgba(0,0,0,0.8)' }}>
         
         {/* 📺 طبقة مشغل البث والتفاعل */}
         {/* تم إضافة WebkitTapHighlightColor لمنع ظهور المربع الأزرق المزعج عند النقر المستمر على الموبايل */}
@@ -693,5 +706,5 @@ function LiveStreamVideoRenderer() {
     );
   }
 
-  return <VideoTrack trackRef={cameraTrack as TrackReference} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
+  return <VideoTrack className="snor-viewer-video" trackRef={cameraTrack as TrackReference} style={{ width: '100%', height: '100%' }} />;
 }
